@@ -64,11 +64,11 @@ class MarketOnClosePortfolio(Portfolio):
         return positions
 
     def backtest_portfolio(self):
-        portfolio = pd.DataFrame(self.positions * self.bars['Close']
-        pos_diff = self.positions.diff()
-
-        portfolio['holdings'] = (self.positions * self.bars['Close']).sum(axis=1)
-        portfolio['cash'] = self.initial_capital - (pos_diff * self.bars['Close']).sum(axis=1).cumsum()
+        portfolio = pd.DataFrame(self.positions)
+        pos_diff = 1
+        portfolio['holdings'] = positions[self.symbol]* self.bars['Close']
+        portfolio['trades'] = portfolio[self.symbol].diff()*self.bars['Close']
+        portfolio['cash'] = self.initial_capital - (portfolio['trades']).cumsum()
 
         portfolio['total'] = portfolio['cash'] + portfolio['holdings']
         portfolio['returns'] = portfolio['total'].pct_change()
@@ -83,15 +83,14 @@ if __name__ == "__main__":
 
     # Create a Moving Average Cross Strategy instance with a short moving
     # average window of 100 days and a long window of 400 days
-    mac = MovingAverageCrossStrategy(symbol, bars, short_window=1, long_window=5)
+    mac = MovingAverageCrossStrategy(symbol, bars, short_window=10, long_window=50)
     signals = mac.generate_signals()
 
     # Create a portfolio of AAPL, with $100,000 initial capital
     portfolio = MarketOnClosePortfolio(symbol, bars, signals, initial_capital=100000.0)
-    print(positions)
+    print(signals)
     returns = portfolio.backtest_portfolio()
-    print(returns)
-
+    returns.to_csv('out.csv')
     # Plot two charts to assess trades and equity curve
     fig = plt.figure()
     fig.patch.set_facecolor('white')  # Set the outer colour to white
@@ -124,4 +123,4 @@ if __name__ == "__main__":
              'v', markersize=10, color='k')
 
     # Plot the figure
-    fig.show()
+    plt.show()
