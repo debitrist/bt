@@ -64,9 +64,9 @@ class MarketOnClosePortfolio(Portfolio):
         return positions
 
     def backtest_portfolio(self):
-        portfolio = pd.DataFrame(self.positions)
+        portfolio = self.positions
         pos_diff = 1
-        portfolio['holdings'] = positions[self.symbol]* self.bars['Close']
+        portfolio['holdings'] = portfolio[self.symbol]* self.bars['Close']
         portfolio['trades'] = portfolio[self.symbol].diff()*self.bars['Close']
         portfolio['cash'] = self.initial_capital - (portfolio['trades']).cumsum()
 
