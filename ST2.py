@@ -234,10 +234,14 @@ if __name__ == "__main__":
     fig.patch.set_facecolor('white')  # Set the outer colour to white
     ax1 = fig.add_subplot(211, ylabel='Price in $')
 
-    # Plot the AAPL closing price overlaid with the moving averages
+    # Plot the AAPL closing price overlaid with the indicator
     bars['Close'].plot(ax=ax1, color='r', lw=2.)
     signals[[stt]].plot(ax=ax1, lw=2.)
 
+    # Plot the "buy" trades against AAPL
+    ax1.plot(portfolio.loc[portfolio.tradessig == 1.0].index,
+             portfolio['entrypx'].loc[portfolio.tradessig == 1.0],
+             '^', markersize=10, color='m')
 
     # Plot the equity curve in dollars
     ax2 = fig.add_subplot(212, ylabel='Portfolio value in $')
@@ -246,3 +250,4 @@ if __name__ == "__main__":
 
     # Plot the figure
     plt.show()
+    print(portfolio['entrypx'].loc[portfolio.tradessig == 1.0])
