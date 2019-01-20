@@ -100,8 +100,6 @@ class STStrategy(Strategy):
                 uptcounter[i]=uptcounter[i-1]+1
             else: downtcounter[i]=downtcounter[i-1]+1
 
-        global df1
-        df1=pd.DataFrame(pd.Series(highcount))
         df['highcount'] = highcount
         df['uptcounter'] = uptcounter
         df['lowcount'] = lowcount
@@ -113,60 +111,72 @@ class STStrategy(Strategy):
         longentrysig = pd.Series(index=df.index).fillna(0)
         longexitsig = pd.Series(index=df.index).fillna(0)
         entrypx = pd.Series(index=df.index).fillna(0)
-        stoppx = pd.Series(index=df.index).fillna(0)
         exitpx = pd.Series(index=df.index).fillna(0)
+        stoppx = pd.Series(index=df.index).fillna(0)
+        targetpx = pd.Series(index=df.index).fillna(0)
         stoptrig = pd.Series(index=df.index)
-        exittrig = pd.Series(index=df.index)
+        targettrig = pd.Series(index=df.index)
         tradestatus = pd.Series(index=df.index).fillna(0)
 
         for i in range(1, len(df.index)):
+            #criteria for triggering an entry signal: 1. stx must be positive, 2. no trades currently on, 3. more than 3 prior countertrend moves, 4. current bar Higher high
             if df[stx][i]==1 and tradestatus[i-1]==0 and any(df['uptcounter'][i-1:i]>=ctperiod) and df['High'][i]>df['High'][i-1]:
                 longentrysig[i]=1
             else: longentrysig[i]=0
-            if longentrysig[i]==1:
+            if longentrysig[i]==1: 
+                #upon entry logic, set entry, stop, target prices
                 entrypx[i]= max(df['High'][i-1], df['Low'][i])
                 stoppx[i]=max(df['Low'][i-1],df[stx][i-1])
-                exitpx[i]=entrypx[i]+(entrypx[i]-stoppx[i])*rr
+                targetpx[i]=entrypx[i]+(entrypx[i]-stoppx[i])*rr
                 tradestatus[i]=1
                 ##stoplogic on the current bar
                 if stoppx[i]<df['Low'][i]:
                     stoptrig.iloc[i]= "n"
-                else: stoptrig.iloc[i]= "y"
-                if exitpx[i]>df['High'][i]:
-                    exittrig.iloc[i]="n"
-                else: exittrig.iloc[i]="y"
+                else: 
+                    stoptrig.iloc[i]= "y"
+                    exitpx[i]=stoppx[i]
+                if targetpx[i]>df['High'][i]:
+                    targettrig.iloc[i]="n"
+                else: 
+                    targettrig.iloc[i]="y"
+                    exitpx[i]=targetpx[i]
             elif tradestatus[i-1]==1:
                 entrypx[i]=entrypx[i-1]
                 stoppx[i]=stoppx[i-1]
-                exitpx[i]=exitpx[i-1]
+                targetpx[i]=targetpx[i-1]
                 # stop logic on subsequent bars
                 if stoppx[i]<df['Low'][i]:
                     stoptrig.iloc[i]="n"
-                else: stoptrig.iloc[i] = "y"
-                if exitpx[i]>df['High'][i]:
-                    exittrig.iloc[i]="n"
-                else: exittrig.iloc[i]="y"
+                else: 
+                    stoptrig.iloc[i] = "y"
+                    exitpx[i]=stoppx[i]
+                if targetpx[i]>df['High'][i]:
+                    targettrig.iloc[i]="n"
+                else: 
+                    targettrig.iloc[i]="y"
+                    exitpx[i]=targetpx[i]
             else:
                 entrypx[i]=0
                 stoppx[i]=0
-                exitpx[i]=0
+                targetpx[i]=0
 
             ##tradestatus
-            if (exittrig.iloc[i]=="y") or (stoptrig.iloc[i]=="y"):
+            if (targettrig.iloc[i]=="y") or (stoptrig.iloc[i]=="y"):
                 longexitsig[i] =-1
-            if (longentrysig[i] == 1) and (exittrig.iloc[i]=="n") and (stoptrig.iloc[i]=="n"):
+            if (longentrysig[i] == 1) and (targettrig.iloc[i]=="n") and (stoptrig.iloc[i]=="n"):
                 tradestatus[i]=1
-            elif (exittrig.iloc[i]=="n") and (stoptrig.iloc[i]=="n"):
+            elif (targettrig.iloc[i]=="n") and (stoptrig.iloc[i]=="n"):
                 tradestatus[i]=tradestatus[i-1]
             else: tradestatus[i]=0
 
         df['longentrysig']=longentrysig
         df['longexitsig']=longexitsig
         df['entrypx']=entrypx
-        df['stoppx']=stoppx
         df['exitpx']=exitpx
+        df['stoppx']=stoppx
+        df['targetpx']=targetpx
         df['stoptrig']=stoptrig
-        df['exittrig']=exittrig
+        df['targettrig']=targettrig
         df['tradestatus']=tradestatus
         return df
 
@@ -192,41 +202,27 @@ class PortfolioGenerate(Portfolio):
         portfolio['longentrysig']=self.bars['longentrysig']
         portfolio['longexitsig']=self.bars['longexitsig']
         portfolio['tradestatus']=self.bars['tradestatus']
+        portfolio['entrypx']=self.bars['entrypx']
+        portfolio['exitpx']=self.bars['exitpx']
         entrytrade = pd.Series(index=self.bars.index).fillna(0)
-        entrytradeholding = pd.Series(index=self.bars.index).fillna(0)
-        exitpx = pd.Series(index=self.bars.index).fillna(0)
+        closetradeholding = pd.Series(index=self.bars.index).fillna(0)
         exittrade = pd.Series(index=self.bars.index).fillna(0)
 
         for i in range(1, len(portfolio.index)):
-            suggestedpositionsize = self.initial_capital*self.risk/(self.bars['entrypx'][i]-self.bars['stoppx'][i])
-            if portfolio['longentrysig'][i] == 1 and portfolio['longexitsig'][i]==-1:
-                entrytradeholding[i]= suggestedpositionsize
-                entrytrade[i]=self.bars['entrypx'][i]*entrytradeholding[i]
-                if self.bars['stoptrig'].iloc[i] == "y":
-                    exitpx[i]=self.bars['stoppx'][i]
-                    exittrade[i]= exitpx[i]*entrytradeholding[i]
-                else:
-                    exitpx[i]=self.bars['exitpx'][i]
-                    exittrade[i] = exitpx[i] * entrytradeholding[i]
-            elif portfolio['longentrysig'][i] == 1:
-                entrytradeholding[i] = suggestedpositionsize
-                entrytrade[i] = self.bars['entrypx'][i] * entrytradeholding[i]
-            elif portfolio['tradestatus'][i] == 1:
-                entrytradeholding[i]=entrytradeholding[i-1]
-            else:
-                if portfolio['longexitsig'][i]==-1:
-                    if self.bars['stoptrig'].iloc[i] == "y":
-                        exitpx[i] = self.bars['stoppx'][i]
-                        exittrade[i] = exitpx[i] * entrytradeholding[i-1]
-                    else:
-                        exitpx[i] = self.bars['exitpx'][i]
-                        exittrade[i] = exitpx[i] * entrytradeholding[i-1]
+            if portfolio['longentrysig'][i] == 1:
+                suggestedpositionsize = self.initial_capital*self.risk/(self.bars['entrypx'][i]-self.bars['stoppx'][i])
+                closetradeholding[i]=suggestedpositionsize*(portfolio['longentrysig'][i]+portfolio['longexitsig'][i])
+                entrytrade[i]=self.bars['entrypx'][i]*suggestedpositionsize
+            elif portfolio['longexitsig'][i]==-1:
+                exittrade[i]=portfolio['exitpx'][i]*suggestedpositionsize
+                closetradeholding[i]=0
+            else: closetradeholding[i] = closetradeholding[i-1]
+            
+                
 
         portfolio['trades']= -entrytrade+exittrade
-        portfolio['tradeholding']=entrytradeholding
-        portfolio['entrypx']=self.bars['entrypx']
-        portfolio['exitpx']=exitpx
-        portfolio['holdings'] = portfolio['tradeholding']* self.bars['Close']
+        portfolio['positiononclose']=closetradeholding
+        portfolio['holdings'] = portfolio['positiononclose']* self.bars['Close']
         portfolio['cash'] = self.initial_capital + (portfolio['trades']).cumsum()
         portfolio['total'] = portfolio['cash'] + portfolio['holdings']
         portfolio['returns'] = portfolio['total'].pct_change()
@@ -244,10 +240,8 @@ if __name__ == "__main__":
     signals = st.entry()
     portfolio = PortfolioGenerate(symbol, bars, signals, initial_capital=100000.0)
     returns = portfolio.backtest_portfolio()
-    print(df1)
     print(portfolio)
     portfolio.to_csv('test6.csv')
-    signals.to_csv('test5.csv')
 
     # Plot two charts to assess trades and equity curve
     fig = plt.figure()
