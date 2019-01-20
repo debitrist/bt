@@ -123,7 +123,7 @@ class STStrategy(Strategy):
             if df[stx][i]==1 and tradestatus[i-1]==0 and any(df['uptcounter'][i-1:i]>=ctperiod) and df['High'][i]>df['High'][i-1]:
                 longentrysig[i]=1
             else: longentrysig[i]=0
-            if longentrysig[i]==1: 
+            if longentrysig[i]==1:
                 #upon entry logic, set entry, stop, target prices
                 entrypx[i]= max(df['High'][i-1], df['Low'][i])
                 stoppx[i]=max(df['Low'][i-1],df[stx][i-1])
@@ -132,12 +132,12 @@ class STStrategy(Strategy):
                 ##stoplogic on the current bar
                 if stoppx[i]<df['Low'][i]:
                     stoptrig.iloc[i]= "n"
-                else: 
+                else:
                     stoptrig.iloc[i]= "y"
                     exitpx[i]=stoppx[i]
                 if targetpx[i]>df['High'][i]:
                     targettrig.iloc[i]="n"
-                else: 
+                else:
                     targettrig.iloc[i]="y"
                     exitpx[i]=targetpx[i]
             elif tradestatus[i-1]==1:
@@ -147,12 +147,12 @@ class STStrategy(Strategy):
                 # stop logic on subsequent bars
                 if stoppx[i]<df['Low'][i]:
                     stoptrig.iloc[i]="n"
-                else: 
+                else:
                     stoptrig.iloc[i] = "y"
                     exitpx[i]=stoppx[i]
                 if targetpx[i]>df['High'][i]:
                     targettrig.iloc[i]="n"
-                else: 
+                else:
                     targettrig.iloc[i]="y"
                     exitpx[i]=targetpx[i]
             else:
@@ -213,12 +213,13 @@ class PortfolioGenerate(Portfolio):
                 suggestedpositionsize = self.initial_capital*self.risk/(self.bars['entrypx'][i]-self.bars['stoppx'][i])
                 closetradeholding[i]=suggestedpositionsize*(portfolio['longentrysig'][i]+portfolio['longexitsig'][i])
                 entrytrade[i]=self.bars['entrypx'][i]*suggestedpositionsize
+                exittrade[i]=portfolio['exitpx'][i]*suggestedpositionsize
             elif portfolio['longexitsig'][i]==-1:
                 exittrade[i]=portfolio['exitpx'][i]*suggestedpositionsize
                 closetradeholding[i]=0
             else: closetradeholding[i] = closetradeholding[i-1]
-            
-                
+
+
 
         portfolio['trades']= -entrytrade+exittrade
         portfolio['positiononclose']=closetradeholding
@@ -227,6 +228,8 @@ class PortfolioGenerate(Portfolio):
         portfolio['total'] = portfolio['cash'] + portfolio['holdings']
         portfolio['returns'] = portfolio['total'].pct_change()
         return portfolio
+      
+
 
 if __name__ == "__main__":
     # Obtain daily bars of AAPL from Yahoo Finance for the period
@@ -240,7 +243,7 @@ if __name__ == "__main__":
     signals = st.entry()
     portfolio = PortfolioGenerate(symbol, bars, signals, initial_capital=100000.0)
     returns = portfolio.backtest_portfolio()
-    print(portfolio)
+    print(returns)
     portfolio.to_csv('test6.csv')
 
     # Plot two charts to assess trades and equity curve
@@ -263,4 +266,10 @@ if __name__ == "__main__":
 
 
     # Plot the figure
-    print(portfolio['entrypx'].loc[portfolio.longentrysig == 1.0])
+    entry = pd.Series(portfolio['entrypx'].loc[portfolio.longentrysig == 1.0].values)
+    exit = pd.Series(portfolio['exitpx'].loc[portfolio.longexitsig == -1.0].values)
+    entrydate = pd.Series(portfolio.loc[portfolio.longentrysig == 1.0].index)
+    exitdate = pd.Series(portfolio.loc[portfolio.longexitsig == -1.0].index)
+    maxddpx = [signals['Low'].loc[x:y].min() for x,y in zip(entrydate,exitdate)]
+    SummaryTable = pd.concat([pd.Series(entry, name="EntryPx"), pd.Series(exit, name="ExitPx"), pd.Series(maxddpx, name="MAE"), pd.Series(entrydate, name="EntryDate"),pd.Series(exitdate, name="exitdate")],axis=1)
+    print(SummaryTable)
