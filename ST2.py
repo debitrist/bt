@@ -111,6 +111,7 @@ class STStrategy(Strategy):
     def entry(self, ctperiod=2, rr=2):
         df = self.bars
         longentrysig = pd.Series(index=df.index).fillna(0)
+        longexitsig = pd.Series(index=df.index).fillna(0)
         entrypx = pd.Series(index=df.index).fillna(0)
         stoppx = pd.Series(index=df.index).fillna(0)
         exitpx = pd.Series(index=df.index).fillna(0)
@@ -151,11 +152,16 @@ class STStrategy(Strategy):
                 exitpx[i]=0
 
             ##tradestatus
-            if (exittrig.iloc[i]=="n") and (stoptrig.iloc[i]=="n"):
+            if (exittrig.iloc[i]=="y") or (stoptrig.iloc[i]=="y"):
+                longexitsig[i] =-1
+            if (longentrysig[i] == 1) and (exittrig.iloc[i]=="n") and (stoptrig.iloc[i]=="n"):
                 tradestatus[i]=1
+            elif (exittrig.iloc[i]=="n") and (stoptrig.iloc[i]=="n"):
+                tradestatus[i]=tradestatus[i-1]
             else: tradestatus[i]=0
 
         df['longentrysig']=longentrysig
+        df['longexitsig']=longexitsig
         df['entrypx']=entrypx
         df['stoppx']=stoppx
         df['exitpx']=exitpx
@@ -183,31 +189,45 @@ class PortfolioGenerate(Portfolio):
     def backtest_portfolio(self):
         global portfolio
         portfolio = pd.DataFrame(index=self.bars.index).fillna(0)
-        portfolio['tradessig']=self.bars['tradestatus'].diff()
+        portfolio['longentrysig']=self.bars['longentrysig']
+        portfolio['longexitsig']=self.bars['longexitsig']
+        portfolio['tradestatus']=self.bars['tradestatus']
         entrytrade = pd.Series(index=self.bars.index).fillna(0)
         entrytradeholding = pd.Series(index=self.bars.index).fillna(0)
         exitpx = pd.Series(index=self.bars.index).fillna(0)
         exittrade = pd.Series(index=self.bars.index).fillna(0)
 
         for i in range(1, len(portfolio.index)):
-            if portfolio['tradessig'][i] == 1:
-                entrytradeholding[i]=self.initial_capital*self.risk/(self.bars['entrypx'][i]-self.bars['stoppx'][i])
+            suggestedpositionsize = self.initial_capital*self.risk/(self.bars['entrypx'][i]-self.bars['stoppx'][i])
+            if portfolio['longentrysig'][i] == 1 and portfolio['longexitsig'][i]==-1:
+                entrytradeholding[i]= suggestedpositionsize
                 entrytrade[i]=self.bars['entrypx'][i]*entrytradeholding[i]
-            elif portfolio['tradessig'][i]==-1:
                 if self.bars['stoptrig'].iloc[i] == "y":
                     exitpx[i]=self.bars['stoppx'][i]
-                    exittrade[i]=-exitpx[i]*entrytradeholding[i-1]
+                    exittrade[i]= exitpx[i]*entrytradeholding[i]
                 else:
                     exitpx[i]=self.bars['exitpx'][i]
-                    exittrade[i] = -exitpx[i] * entrytradeholding[i - 1]
-            else: entrytradeholding[i] = entrytradeholding[i - 1]
+                    exittrade[i] = exitpx[i] * entrytradeholding[i]
+            elif portfolio['longentrysig'][i] == 1:
+                entrytradeholding[i] = suggestedpositionsize
+                entrytrade[i] = self.bars['entrypx'][i] * entrytradeholding[i]
+            elif portfolio['tradestatus'][i] == 1:
+                entrytradeholding[i]=entrytradeholding[i-1]
+            else:
+                if portfolio['longexitsig'][i]==-1:
+                    if self.bars['stoptrig'].iloc[i] == "y":
+                        exitpx[i] = self.bars['stoppx'][i]
+                        exittrade[i] = exitpx[i] * entrytradeholding[i-1]
+                    else:
+                        exitpx[i] = self.bars['exitpx'][i]
+                        exittrade[i] = exitpx[i] * entrytradeholding[i-1]
 
-        portfolio['trades']=entrytrade+exittrade
+        portfolio['trades']= -entrytrade+exittrade
         portfolio['tradeholding']=entrytradeholding
         portfolio['entrypx']=self.bars['entrypx']
         portfolio['exitpx']=exitpx
         portfolio['holdings'] = portfolio['tradeholding']* self.bars['Close']
-        portfolio['cash'] = self.initial_capital - (portfolio['trades']).cumsum()
+        portfolio['cash'] = self.initial_capital + (portfolio['trades']).cumsum()
         portfolio['total'] = portfolio['cash'] + portfolio['holdings']
         portfolio['returns'] = portfolio['total'].pct_change()
         return portfolio
@@ -225,9 +245,9 @@ if __name__ == "__main__":
     portfolio = PortfolioGenerate(symbol, bars, signals, initial_capital=100000.0)
     returns = portfolio.backtest_portfolio()
     print(df1)
-    print(signals)
     print(portfolio)
     portfolio.to_csv('test6.csv')
+    signals.to_csv('test5.csv')
 
     # Plot two charts to assess trades and equity curve
     fig = plt.figure()
@@ -239,8 +259,8 @@ if __name__ == "__main__":
     signals[[stt]].plot(ax=ax1, lw=2.)
 
     # Plot the "buy" trades against AAPL
-    ax1.plot(portfolio.loc[portfolio.tradessig == 1.0].index,
-             portfolio['entrypx'].loc[portfolio.tradessig == 1.0],
+    ax1.plot(portfolio.loc[portfolio.longentrysig == 1.0].index,
+             portfolio['entrypx'].loc[portfolio.longentrysig == 1.0],
              '^', markersize=10, color='m')
 
     # Plot the equity curve in dollars
@@ -249,5 +269,4 @@ if __name__ == "__main__":
 
 
     # Plot the figure
-    plt.show()
-    print(portfolio['entrypx'].loc[portfolio.tradessig == 1.0])
+    print(portfolio['entrypx'].loc[portfolio.longentrysig == 1.0])
