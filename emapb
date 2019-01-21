@@ -2,10 +2,11 @@ import datetime
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import pandas_datareader.data as web
 from itertools import groupby
 
 
-class STStrategy():
+class emapbStrategy():
     """
     Requires:
     symbol - A stock symbol on which to form a strategy on.
@@ -13,13 +14,14 @@ class STStrategy():
     short_window - Lookback period for short moving average.
     long_window - Lookback period for long moving average."""
 
-    def __init__(self, symbol, bars, atr_period=10, atr_multiplier=2.25, pullback_period=5):
+    def __init__(self, symbol, bars, atr_period=10, atr_multiplier=2.25, pullback_period=5, emaperiod=20):
         self.symbol = symbol
         self.bars = bars
 
         self.atr_period = atr_period
         self.atr_multiplier = atr_multiplier
         self.pullback_period = pullback_period
+        self.emaperiod = emaperiod
 
     def ATR(self):
         global atr
@@ -36,36 +38,54 @@ class STStrategy():
 
     def emakeltner(self, emaperiod=20):
         global ema
-        ema = 'EMA_' + str(self.atr_period) + '_' + str(self.atr_multiplier)
+        ema = 'EMA_' + str(emaperiod) + '_' + str(self.atr_multiplier)
 
         df = self.bars
-        rollinghigh = pd.Series(df['High'].rolling(20).mean())
-        rollinglow = pd.Series(df['Low'].rolling(20).mean())
-        df[ema]= (rollinghigh+rollinglow) / 2
+        rollinghigh = pd.Series(df['High'].rolling(emaperiod).mean())
+        rollinglow = pd.Series(df['Low'].rolling(emaperiod).mean())
+        df[ema] = df['Close'].ewm(span=emaperiod, adjust=False).mean()
         df['kelt_ub'] = df[ema] + self.atr_multiplier * df[atr]
         df['kelt_lb'] = df[ema] - self.atr_multiplier * df[atr]
-        
+
         return df
 
-    def HLCounter(self):
+    def HLCounter(self, atrfilter=2, volumefilter=1.5, volumema=20):
         df = self.bars
-        
+
         upthrustcount = pd.Series(index=df.index).fillna(0.0)
-        lowthrustcount = pd.Series(index=df.index).fillna(0.0)
-        
+        downthrustcount = pd.Series(index=df.index).fillna(0.0)
+        balancecount = pd.Series(index=df.index).fillna(0.0)
+        ###upthrust has more validity if accompanied by expanding ATR, and on increased volume
         for i in range(1, len(df.index)):
-            if df['Close'][i] >= df['kelt_ub'][i]:
-                upthrustcount[i] = upthrustcount[i-1]+1
-                lowthrustcount[i] = 0
+            #highcount
+            if (df['Close'][i] >= df['kelt_ub'][i]) and (df['TR'][i]>atrfilter*df[atr][i-1]) and (df['Volume'][i]>volumefilter*df['Volume'].rolling(volumema).mean()[i]):
+                upthrustcount[i] = upthrustcount[i - 1] + 2 + (df['TR'][i]/df[atr][i-1])-1
+            elif (df['Close'][i] >= df['kelt_ub'][i]) and (df['TR'][i]>atrfilter*df[atr][i-1] or df['Volume'][i]>volumefilter*df['Volume'].rolling(volumema).mean()[i]):
+                upthrustcount[i] = upthrustcount[i - 1] + 2
+            elif df['Close'][i] >= df['kelt_ub'][i]:
+                upthrustcount[i] = upthrustcount[i - 1] + 0.5
             else:
-                upthrustcount[i]=0
-                lowthrustcount[i]=0
+                upthrustcount[i] = 0
+            ##lowcount
+            if (df['Close'][i] <= df['kelt_lb'][i]) and (df['TR'][i]>atrfilter*df[atr][i-1]) and (df['Volume'][i]>volumefilter*df['Volume'].rolling(volumema).mean()[i]):
+                downthrustcount[i] = downthrustcount[i - 1] + 2 + (df['TR'][i]/df[atr][i-1])-1
+            elif (df['Close'][i] <= df['kelt_lb'][i]) and (df['TR'][i]>atrfilter*df[atr][i-1] or df['Volume'][i]>volumefilter*df['Volume'].rolling(volumema).mean()[i]):
+                downthrustcount[i] = downthrustcount[i - 1] + 2
+            elif df['Close'][i] <= df['kelt_lb'][i]:
+                downthrustcount[i] = downthrustcount[i - 1] + 0.5
+            else:
+                downthrustcount[i] = 0
+
+            if df['Low'][i] <= df[ema][i] <= df['High'][i]:
+                balancecount[i]=balancecount[i-1]+1
+            else: balancecount[i]=0
 
         df['upthrustcounter'] = upthrustcount
-        df['downthrustcounter'] = lowthrustcount
+        df['downthrustcounter'] = downthrustcount
+        df['balancecount'] = balancecount
         return df
 
-    def entry(self, ctperiod=2, rr=3):
+    def entry(self, upthrustlookback=10, upthrustthreshold=3, rr=3, stopatrmult=1):
         df = self.bars
         longentrysig = pd.Series(index=df.index).fillna(0)
         longexitsig = pd.Series(index=df.index).fillna(0)
@@ -78,15 +98,16 @@ class STStrategy():
         tradestatus = pd.Series(index=df.index).fillna(0)
 
         for i in range(1, len(df.index)):
-            # criteria for triggering an entry signal: 1. stx must be positive, 2. no trades currently on, 3. more than 3 prior countertrend moves, 4. current bar Higher high
-            if tradestatus[i - 1] == 0 and any(df['upthrustcounter'][(i-10):i] == 1) and (df['Low'][i-1]<=df[ema][i-1]<=df['High'][i-1]):
+            # criteria for triggering an entry signal: 1. upthrust (close over upperkeltband) within lookback period, 2. no trades currently on, 3. prior bar EMA between HL
+            if tradestatus[i - 1] == 0 and any(df['upthrustcounter'][(i - upthrustlookback):i] >= upthrustthreshold) and (
+                    df['Low'][i - 1] <= df[ema][i - 1] <= df['High'][i - 1]):
                 longentrysig[i] = 1
             else:
                 longentrysig[i] = 0
             if longentrysig[i] == 1:
                 # upon entry logic, set entry, stop, target prices
                 entrypx[i] = df['Open'][i]
-                stoppx[i] = df['kelt_lb'][i]
+                stoppx[i] = entrypx[i]- df[atr][i-1]*stopatrmult
                 targetpx[i] = entrypx[i] + (entrypx[i] - stoppx[i]) * rr
                 tradestatus[i] = 1
                 ##stoplogic on the current bar
@@ -102,7 +123,7 @@ class STStrategy():
                     exitpx[i] = targetpx[i]
             elif tradestatus[i - 1] == 1:
                 entrypx[i] = entrypx[i - 1]
-                stoppx[i] = stoppx[i - 1]
+                stoppx[i] = df['kelt_lb'][i - 1] #trailing stop
                 targetpx[i] = targetpx[i - 1]
                 # stop logic on subsequent bars
                 if stoppx[i] < df['Low'][i]:
@@ -175,9 +196,9 @@ class PortfolioGenerate():
         for i in range(1, len(portfolio.index)):
             if portfolio['longentrysig'][i] == 1:
                 suggestedpositionsize = self.initial_capital * self.risk / (
-                            self.bars['entrypx'][i] - self.bars['stoppx'][i])
+                        self.bars['entrypx'][i] - self.bars['stoppx'][i])
                 closetradeholding[i] = suggestedpositionsize * (
-                            portfolio['longentrysig'][i] + portfolio['longexitsig'][i])
+                        portfolio['longentrysig'][i] + portfolio['longexitsig'][i])
                 entrytrade[i] = self.bars['entrypx'][i] * suggestedpositionsize
                 exittrade[i] = portfolio['exitpx'][i] * suggestedpositionsize
             elif portfolio['longexitsig'][i] == -1:
@@ -194,6 +215,7 @@ class PortfolioGenerate():
         portfolio['returns'] = portfolio['total'].pct_change()
         return portfolio
 
+
 class Analytics():
 
     def getresults(self):
@@ -206,8 +228,8 @@ class Analytics():
 
         # Cummulative Returns
         cum_returns_s = np.exp(np.log(1 + returns_s).cumsum())
-        
-         # Drawdown, max drawdown, max drawdown duration
+
+        # Drawdown, max drawdown, max drawdown duration
         def create_drawdowns(returns):
             idx = returns.index
             hwm = np.zeros(len(idx))
@@ -226,21 +248,19 @@ class Analytics():
                     for k, g in groupby(perf["DurationCheck"])
                 )
             return perf["Drawdown"], np.max(perf["Drawdown"]), duration
-            
+
         dd_s, max_dd, dd_dur = create_drawdowns(cum_returns_s)
 
         statistics = {}
 
         # Equity statistics
-        statistics["sharpe"] = np.sqrt(252) * (np.mean(returns_s)) / np.std(returns_s)
+        statistics["Sharpe"] = round(np.sqrt(252) * (np.mean(returns_s)) / np.std(returns_s),2)
         statistics["max_drawdown"] = max_dd
         statistics["max_drawdown_pct"] = max_dd
         statistics["max_drawdown_duration"] = dd_dur
 
-        
-        return statistics
+        print(statistics)
 
-        
     def summaryanalytics(self):
         ##Analytics
         entry = pd.Series(portfolio['entrypx'].loc[portfolio.longentrysig == 1.0].values)
@@ -274,12 +294,61 @@ class Analytics():
         startdate = signals.index[0]
         enddate = signals.index[-1]
         cagr = 100 * ((portfolio['total'].iloc[-1] / 100000) ** (1 / ((enddate - startdate).days / 365)) - 1)
-        bhcagr = 100 * ((portfolio['ClosePx'].iloc[-1] / portfolio['ClosePx'].iloc[0]) ** (1 / ((enddate - startdate).days / 365)) - 1)
+        bhcagr = 100 * ((portfolio['ClosePx'].iloc[-1] / portfolio['ClosePx'].iloc[0]) ** (
+                    1 / ((enddate - startdate).days / 365)) - 1)
 
-        print("On {}, Acc Equity compounded at {}% CAGR vs BuyHold at {}% CAGR".format(symbol, round(cagr, 2),round(bhcagr,2)))
+        print("On {}, Acc Equity compounded at {}% CAGR vs BuyHold at {}% CAGR".format(symbol, round(cagr, 2),
+                                                                                       round(bhcagr, 2)))
         print("Winrate is {}% with {} winners".format(round(100 * winners / len(SummaryTable), 1), winners))
         print("Winner MFE is {} R, MAE is {} R".format(round(winavgmfe, 2), round(winavgmae, 2)))
         print("Loser MFE is {} R, MAE is {} R".format(round(loseavgmfe, 2), round(loseavgmae, 2)))
         print("Winner duration {} days, Loser duration {} days".format(windur, losedur))
 
         return SummaryTable
+
+if __name__ == "__main__":
+    # Obtain daily bars of AAPL from Yahoo Finance for the period
+    symbol = 'nflx'
+    bars = web.DataReader(symbol, 'yahoo', datetime.datetime(2010, 1, 1), datetime.datetime(2019, 1, 20))
+    st = emapbStrategy(symbol, bars, atr_period=10, atr_multiplier=2.25, pullback_period=5)
+    signals = st.ATR()
+    signals = st.emakeltner(emaperiod=20)
+    signals = st.HLCounter(atrfilter=2, volumefilter=1.5, volumema=20)
+    signals = st.entry(upthrustlookback=15, upthrustthreshold=3, rr=3,stopatrmult=1.5)
+    returns = PortfolioGenerate(symbol, bars, signals, initial_capital=100000.0,risk=0.02)
+    returns = returns.backtest_portfolio()
+    Analytics().getresults()
+    summtable = Analytics().summaryanalytics()
+    writer = pd.ExcelWriter('pandas_multiple.xlsx')
+    signals.to_excel(writer, 'signal')
+    returns.to_excel(writer, 'return')
+    summtable.to_excel(writer, 'tradesummary')
+    # Close the Pandas Excel writer and output the Excel file.
+    writer.save()
+
+
+   # Plot two charts to assess trades and equity curve
+    fig = plt.figure()
+    fig.patch.set_facecolor('white')  # Set the outer colour to white
+    ax1 = fig.add_subplot(211, ylabel='Price in $')
+
+    # Plot the AAPL closing price overlaid with the indicator
+    bars['Close'].plot(ax=ax1, color='r', lw=2.)
+    signals[[ema]].plot(ax=ax1, lw=2.)
+
+    # Plot the "buy" trades against AAPL
+    ax1.plot(portfolio.loc[portfolio.longentrysig == 1.0].index,
+             portfolio['entrypx'].loc[portfolio.longentrysig == 1.0],
+             '^', markersize=5, color='m')
+
+    # Plot the "exit" trades against AAPL
+    ax1.plot(portfolio.loc[portfolio.longexitsig == -1.0].index,
+             portfolio['exitpx'].loc[portfolio.longexitsig == -1.0],
+             '^', markersize=5, color='k')
+
+    # Plot the equity curve in dollars
+    ax2 = fig.add_subplot(212, ylabel='Portfolio value in $')
+    returns['total'].plot(ax=ax2, lw=2.)
+
+    # Plot the figure
+    plt.show()
