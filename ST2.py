@@ -242,6 +242,48 @@ class PortfolioGenerate(Portfolio):
 
 class Analytics():
 
+    def getresults(self):
+        # Returns
+        returns_s = portfolio['total'].pct_change().replace([np.inf, -np.inf], np.nan)
+        returns_s = returns_s.fillna(0.00)
+        # Rolling Annualised Sharpe
+        rolling = returns_s.rolling(window=252)
+        rolling_sharpe_s = np.sqrt(252) * (rolling.mean() / rolling.std())
+
+        # Cummulative Returns
+        cum_returns_s = np.exp(np.log(1 + returns_s).cumsum())
+        
+         # Drawdown, max drawdown, max drawdown duration
+        def create_drawdowns(returns):
+            idx = returns.index
+            hwm = np.zeros(len(idx))
+
+            # Create the high water mark
+            for t in range(1, len(idx)):
+                hwm[t] = max(hwm[t - 1], returns.iloc[t])
+
+                # Calculate the drawdown and duration statistics
+                perf = pd.DataFrame(index=idx)
+                perf["Drawdown"] = (hwm - returns) / hwm
+                perf["Drawdown"].iloc[0] = 0.0
+                perf["DurationCheck"] = np.where(perf["Drawdown"] == 0, 0, 1)
+                duration = max(
+                    sum(1 for i in g if i == 1)
+                    for k, g in groupby(perf["DurationCheck"])
+                )
+            return perf["Drawdown"], np.max(perf["Drawdown"]), duration
+            
+        dd_s, max_dd, dd_dur = create_drawdowns(cum_returns_s)
+        statistics = {}
+
+        # Equity statistics
+        statistics["sharpe"] = np.sqrt(252) * (np.mean(returns_s)) / np.std(returns_s)
+        statistics["max_drawdown"] = max_dd
+        statistics["max_drawdown_pct"] = max_dd
+        statistics["max_drawdown_duration"] = dd_dur
+        
+        return statistics
+        
     def summaryanalytics(self):
         ##Analytics
         entry = pd.Series(portfolio['entrypx'].loc[portfolio.longentrysig == 1.0].values)
@@ -295,9 +337,10 @@ if __name__ == "__main__":
     signals = st.SuperTrend()
     signals = st.HLCounter()
     signals = st.entry(ctperiod=1, rr=3)
-    portfolio = PortfolioGenerate(symbol, bars, signals, initial_capital=100000.0)
+    portfolio = PortfolioGenerate(symbol, bars, signals, initial_capital=100000.0, risk=0.02)
     returns = portfolio.backtest_portfolio()
     Analytics().summaryanalytics()
+    Analytics().getresults()
     returns.to_csv('test6.csv')
 
 
