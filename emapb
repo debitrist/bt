@@ -1,0 +1,285 @@
+import datetime
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from itertools import groupby
+
+
+class STStrategy():
+    """
+    Requires:
+    symbol - A stock symbol on which to form a strategy on.
+    bars - A DataFrame of bars for the above symbol.
+    short_window - Lookback period for short moving average.
+    long_window - Lookback period for long moving average."""
+
+    def __init__(self, symbol, bars, atr_period=10, atr_multiplier=2.25, pullback_period=5):
+        self.symbol = symbol
+        self.bars = bars
+
+        self.atr_period = atr_period
+        self.atr_multiplier = atr_multiplier
+        self.pullback_period = pullback_period
+
+    def ATR(self):
+        global atr
+        atr = 'ATR_' + str(self.atr_period)
+        df = self.bars
+        df['h-l'] = df['High'] - df['Low']
+        df['h-yc'] = abs(df['High'] - df['Close'].shift())
+        df['l-yc'] = abs(df['Low'] - df['Close'].shift())
+        df['TR'] = df[['h-l', 'h-yc', 'l-yc']].max(axis=1)
+        df[atr] = df['TR'].rolling(self.atr_period).mean()
+        df[atr] = (df[atr].shift() * (self.atr_period - 1) + df['TR']) / self.atr_period
+        df.drop(['h-l', 'h-yc', 'l-yc'], inplace=True, axis=1)
+        return df
+
+    def emakeltner(self, emaperiod=20):
+        global ema
+        ema = 'EMA_' + str(self.atr_period) + '_' + str(self.atr_multiplier)
+
+        df = self.bars
+        rollinghigh = pd.Series(df['High'].rolling(20).mean())
+        rollinglow = pd.Series(df['Low'].rolling(20).mean())
+        df[ema]= (rollinghigh+rollinglow) / 2
+        df['kelt_ub'] = df[ema] + self.atr_multiplier * df[atr]
+        df['kelt_lb'] = df[ema] - self.atr_multiplier * df[atr]
+        
+        return df
+
+    def HLCounter(self):
+        df = self.bars
+        
+        upthrustcount = pd.Series(index=df.index).fillna(0.0)
+        lowthrustcount = pd.Series(index=df.index).fillna(0.0)
+        
+        for i in range(1, len(df.index)):
+            if df['Close'][i] >= df['kelt_ub'][i]:
+                upthrustcount[i] = upthrustcount[i-1]+1
+                lowthrustcount[i] = 0
+            else:
+                upthrustcount[i]=0
+                lowthrustcount[i]=0
+
+        df['upthrustcounter'] = upthrustcount
+        df['downthrustcounter'] = lowthrustcount
+        return df
+
+    def entry(self, ctperiod=2, rr=3):
+        df = self.bars
+        longentrysig = pd.Series(index=df.index).fillna(0)
+        longexitsig = pd.Series(index=df.index).fillna(0)
+        entrypx = pd.Series(index=df.index).fillna(0)
+        exitpx = pd.Series(index=df.index).fillna(0)
+        stoppx = pd.Series(index=df.index).fillna(0)
+        targetpx = pd.Series(index=df.index).fillna(0)
+        stoptrig = pd.Series(index=df.index)
+        targettrig = pd.Series(index=df.index)
+        tradestatus = pd.Series(index=df.index).fillna(0)
+
+        for i in range(1, len(df.index)):
+            # criteria for triggering an entry signal: 1. stx must be positive, 2. no trades currently on, 3. more than 3 prior countertrend moves, 4. current bar Higher high
+            if tradestatus[i - 1] == 0 and any(df['upthrustcounter'][(i-10):i] == 1) and (df['Low'][i-1]<=df[ema][i-1]<=df['High'][i-1]):
+                longentrysig[i] = 1
+            else:
+                longentrysig[i] = 0
+            if longentrysig[i] == 1:
+                # upon entry logic, set entry, stop, target prices
+                entrypx[i] = df['Open'][i]
+                stoppx[i] = df['kelt_lb'][i]
+                targetpx[i] = entrypx[i] + (entrypx[i] - stoppx[i]) * rr
+                tradestatus[i] = 1
+                ##stoplogic on the current bar
+                if stoppx[i] < df['Low'][i]:
+                    stoptrig.iloc[i] = "n"
+                else:
+                    stoptrig.iloc[i] = "y"
+                    exitpx[i] = stoppx[i]
+                if targetpx[i] > df['High'][i]:
+                    targettrig.iloc[i] = "n"
+                else:
+                    targettrig.iloc[i] = "y"
+                    exitpx[i] = targetpx[i]
+            elif tradestatus[i - 1] == 1:
+                entrypx[i] = entrypx[i - 1]
+                stoppx[i] = stoppx[i - 1]
+                targetpx[i] = targetpx[i - 1]
+                # stop logic on subsequent bars
+                if stoppx[i] < df['Low'][i]:
+                    stoptrig.iloc[i] = "n"
+                else:
+                    stoptrig.iloc[i] = "y"
+                    exitpx[i] = stoppx[i]
+                if targetpx[i] > df['High'][i]:
+                    targettrig.iloc[i] = "n"
+                else:
+                    targettrig.iloc[i] = "y"
+                    exitpx[i] = targetpx[i]
+            else:
+                entrypx[i] = 0
+                stoppx[i] = 0
+                targetpx[i] = 0
+
+            ##tradestatus
+            if (targettrig.iloc[i] == "y") or (stoptrig.iloc[i] == "y"):
+                longexitsig[i] = -1
+            if (longentrysig[i] == 1) and (targettrig.iloc[i] == "n") and (stoptrig.iloc[i] == "n"):
+                tradestatus[i] = 1
+            elif (targettrig.iloc[i] == "n") and (stoptrig.iloc[i] == "n"):
+                tradestatus[i] = tradestatus[i - 1]
+            else:
+                tradestatus[i] = 0
+
+        df['longentrysig'] = longentrysig
+        df['longexitsig'] = longexitsig
+        df['entrypx'] = entrypx
+        df['exitpx'] = exitpx
+        df['stoppx'] = stoppx
+        df['targetpx'] = targetpx
+        df['stoptrig'] = stoptrig
+        df['targettrig'] = targettrig
+        df['tradestatus'] = tradestatus
+        return df
+
+
+class PortfolioGenerate():
+    """Encapsulates the notion of a portfolio of positions based
+    on a set of signals as provided by a Strategy.
+
+    Requires:
+    symbol - A stock symbol which forms the basis of the portfolio.
+    bars - A DataFrame of bars for a symbol set.
+    signals - A pandas DataFrame of signals (1, 0, -1) for each symbol.
+    initial_capital - The amount in cash at the start of the portfolio."""
+
+    def __init__(self, symbol, bars, signals, initial_capital=100000.0, risk=0.02):
+        self.symbol = symbol
+        self.bars = bars
+        self.signals = signals
+        self.initial_capital = float(initial_capital)
+        self.risk = risk
+
+    def backtest_portfolio(self):
+        global portfolio
+        portfolio = pd.DataFrame(index=self.bars.index).fillna(0)
+        portfolio['longentrysig'] = self.bars['longentrysig']
+        portfolio['longexitsig'] = self.bars['longexitsig']
+        portfolio['tradestatus'] = self.bars['tradestatus']
+        portfolio['entrypx'] = self.bars['entrypx']
+        portfolio['exitpx'] = self.bars['exitpx']
+        portfolio['ClosePx'] = self.bars['Close']
+        entrytrade = pd.Series(index=self.bars.index).fillna(0)
+        closetradeholding = pd.Series(index=self.bars.index).fillna(0)
+        exittrade = pd.Series(index=self.bars.index).fillna(0)
+
+        for i in range(1, len(portfolio.index)):
+            if portfolio['longentrysig'][i] == 1:
+                suggestedpositionsize = self.initial_capital * self.risk / (
+                            self.bars['entrypx'][i] - self.bars['stoppx'][i])
+                closetradeholding[i] = suggestedpositionsize * (
+                            portfolio['longentrysig'][i] + portfolio['longexitsig'][i])
+                entrytrade[i] = self.bars['entrypx'][i] * suggestedpositionsize
+                exittrade[i] = portfolio['exitpx'][i] * suggestedpositionsize
+            elif portfolio['longexitsig'][i] == -1:
+                exittrade[i] = portfolio['exitpx'][i] * suggestedpositionsize
+                closetradeholding[i] = 0
+            else:
+                closetradeholding[i] = closetradeholding[i - 1]
+
+        portfolio['trades'] = -entrytrade + exittrade
+        portfolio['positiononclose'] = closetradeholding
+        portfolio['holdings'] = portfolio['positiononclose'] * portfolio['ClosePx']
+        portfolio['cash'] = self.initial_capital + (portfolio['trades']).cumsum()
+        portfolio['total'] = portfolio['cash'] + portfolio['holdings']
+        portfolio['returns'] = portfolio['total'].pct_change()
+        return portfolio
+
+class Analytics():
+
+    def getresults(self):
+        # Returns
+        returns_s = portfolio['total'].pct_change().replace([np.inf, -np.inf], np.nan)
+        returns_s = returns_s.fillna(0.00)
+        # Rolling Annualised Sharpe
+        rolling = returns_s.rolling(window=252)
+        rolling_sharpe_s = np.sqrt(252) * (rolling.mean() / rolling.std())
+
+        # Cummulative Returns
+        cum_returns_s = np.exp(np.log(1 + returns_s).cumsum())
+        
+         # Drawdown, max drawdown, max drawdown duration
+        def create_drawdowns(returns):
+            idx = returns.index
+            hwm = np.zeros(len(idx))
+
+            # Create the high water mark
+            for t in range(1, len(idx)):
+                hwm[t] = max(hwm[t - 1], returns.iloc[t])
+
+                # Calculate the drawdown and duration statistics
+                perf = pd.DataFrame(index=idx)
+                perf["Drawdown"] = (hwm - returns) / hwm
+                perf["Drawdown"].iloc[0] = 0.0
+                perf["DurationCheck"] = np.where(perf["Drawdown"] == 0, 0, 1)
+                duration = max(
+                    sum(1 for i in g if i == 1)
+                    for k, g in groupby(perf["DurationCheck"])
+                )
+            return perf["Drawdown"], np.max(perf["Drawdown"]), duration
+            
+        dd_s, max_dd, dd_dur = create_drawdowns(cum_returns_s)
+
+        statistics = {}
+
+        # Equity statistics
+        statistics["sharpe"] = np.sqrt(252) * (np.mean(returns_s)) / np.std(returns_s)
+        statistics["max_drawdown"] = max_dd
+        statistics["max_drawdown_pct"] = max_dd
+        statistics["max_drawdown_duration"] = dd_dur
+
+        
+        return statistics
+
+        
+    def summaryanalytics(self):
+        ##Analytics
+        entry = pd.Series(portfolio['entrypx'].loc[portfolio.longentrysig == 1.0].values)
+        stop = pd.Series(signals['stoppx'].loc[portfolio.longentrysig == 1.0].values)
+        exit = pd.Series(portfolio['exitpx'].loc[portfolio.longexitsig == -1.0].values)
+        entrydate = pd.Series(portfolio.loc[portfolio.longentrysig == 1.0].index)
+        exitdate = pd.Series(portfolio.loc[portfolio.longexitsig == -1.0].index)
+        favexcursion = [signals['High'].loc[x:y].max() for x, y in zip(entrydate, exitdate)]
+        adverseexcursion = [signals['Low'].loc[x:y].min() for x, y in zip(entrydate, exitdate)]
+        tradeduration = [len(signals.loc[x:y].index) for x, y in zip(entrydate, exitdate)]
+
+        ##SummaryTable
+        SummaryTable = pd.concat(
+            [pd.Series(entry, name="EntryPx"), pd.Series(stop, name="StopPx"), pd.Series(exit, name="ExitPx"),
+             pd.Series(favexcursion, name="MFE"), pd.Series(adverseexcursion, name="MAE"),
+             pd.Series(entrydate, name="EntryDate"), pd.Series(exitdate, name="exitdate"),
+             pd.Series(tradeduration, name="TradeDur")], axis=1)
+
+        SummaryTable['Risk%'] = 100 * ((SummaryTable['StopPx'] / SummaryTable['EntryPx']) - 1)
+        SummaryTable['Returns%'] = 100 * ((SummaryTable['ExitPx'] / SummaryTable['EntryPx']) - 1)
+        SummaryTable['MFE RR'] = -100 * ((SummaryTable['MFE'] / SummaryTable['EntryPx']) - 1) / SummaryTable['Risk%']
+        SummaryTable['MAE RR'] = -100 * ((SummaryTable['MAE'] / SummaryTable['EntryPx']) - 1) / SummaryTable['Risk%']
+
+        winners = len(SummaryTable[SummaryTable['Returns%'] > 0])
+        winavgmfe = SummaryTable['MFE RR'].loc[SummaryTable['Returns%'] > 0].median()
+        winavgmae = SummaryTable['MAE RR'].loc[SummaryTable['Returns%'] > 0].median()
+        loseavgmfe = SummaryTable['MFE RR'].loc[SummaryTable['Returns%'] < 0].median()
+        loseavgmae = SummaryTable['MAE RR'].loc[SummaryTable['Returns%'] < 0].median()
+        windur = SummaryTable['TradeDur'].loc[SummaryTable['Returns%'] > 0].median()
+        losedur = SummaryTable['TradeDur'].loc[SummaryTable['Returns%'] < 0].median()
+        startdate = signals.index[0]
+        enddate = signals.index[-1]
+        cagr = 100 * ((portfolio['total'].iloc[-1] / 100000) ** (1 / ((enddate - startdate).days / 365)) - 1)
+        bhcagr = 100 * ((portfolio['ClosePx'].iloc[-1] / portfolio['ClosePx'].iloc[0]) ** (1 / ((enddate - startdate).days / 365)) - 1)
+
+        print("On {}, Acc Equity compounded at {}% CAGR vs BuyHold at {}% CAGR".format(symbol, round(cagr, 2),round(bhcagr,2)))
+        print("Winrate is {}% with {} winners".format(round(100 * winners / len(SummaryTable), 1), winners))
+        print("Winner MFE is {} R, MAE is {} R".format(round(winavgmfe, 2), round(winavgmae, 2)))
+        print("Loser MFE is {} R, MAE is {} R".format(round(loseavgmfe, 2), round(loseavgmae, 2)))
+        print("Winner duration {} days, Loser duration {} days".format(windur, losedur))
+
+        return SummaryTable
