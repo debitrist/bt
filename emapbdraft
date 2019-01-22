@@ -57,19 +57,25 @@ class emapbStrategy():
         balancecount = pd.Series(index=df.index).fillna(0.0)
         ###upthrust has more validity if accompanied by expanding ATR, and on increased volume
         for i in range(1, len(df.index)):
-            #highcount
-            if (df['Close'][i] >= df['kelt_ub'][i]) and (df['TR'][i]>atrfilter*df[atr][i-1]) and (df['Volume'][i]>volumefilter*df['Volume'].rolling(volumema).mean()[i]):
-                upthrustcount[i] = upthrustcount[i - 1] + 2 + (df['TR'][i]/df[atr][i-1])-1
-            elif (df['Close'][i] >= df['kelt_ub'][i]) and (df['TR'][i]>atrfilter*df[atr][i-1] or df['Volume'][i]>volumefilter*df['Volume'].rolling(volumema).mean()[i]):
+            # highcount
+            if (df['Close'][i] >= df['kelt_ub'][i]) and (df['TR'][i] > atrfilter * df[atr][i - 1]) and (
+                    df['Volume'][i] > volumefilter * df['Volume'].rolling(volumema).mean()[i]):
+                upthrustcount[i] = upthrustcount[i - 1] + 2 + (df['TR'][i] / df[atr][i - 1]) - 1
+            elif (df['Close'][i] >= df['kelt_ub'][i]) and (
+                    df['TR'][i] > atrfilter * df[atr][i - 1] or df['Volume'][i] > volumefilter *
+                    df['Volume'].rolling(volumema).mean()[i]):
                 upthrustcount[i] = upthrustcount[i - 1] + 2
             elif df['Close'][i] >= df['kelt_ub'][i]:
                 upthrustcount[i] = upthrustcount[i - 1] + 0.5
             else:
                 upthrustcount[i] = 0
             ##lowcount
-            if (df['Close'][i] <= df['kelt_lb'][i]) and (df['TR'][i]>atrfilter*df[atr][i-1]) and (df['Volume'][i]>volumefilter*df['Volume'].rolling(volumema).mean()[i]):
-                downthrustcount[i] = downthrustcount[i - 1] + 2 + (df['TR'][i]/df[atr][i-1])-1
-            elif (df['Close'][i] <= df['kelt_lb'][i]) and (df['TR'][i]>atrfilter*df[atr][i-1] or df['Volume'][i]>volumefilter*df['Volume'].rolling(volumema).mean()[i]):
+            if (df['Close'][i] <= df['kelt_lb'][i]) and (df['TR'][i] > atrfilter * df[atr][i - 1]) and (
+                    df['Volume'][i] > volumefilter * df['Volume'].rolling(volumema).mean()[i]):
+                downthrustcount[i] = downthrustcount[i - 1] + 2 + (df['TR'][i] / df[atr][i - 1]) - 1
+            elif (df['Close'][i] <= df['kelt_lb'][i]) and (
+                    df['TR'][i] > atrfilter * df[atr][i - 1] or df['Volume'][i] > volumefilter *
+                    df['Volume'].rolling(volumema).mean()[i]):
                 downthrustcount[i] = downthrustcount[i - 1] + 2
             elif df['Close'][i] <= df['kelt_lb'][i]:
                 downthrustcount[i] = downthrustcount[i - 1] + 0.5
@@ -77,15 +83,16 @@ class emapbStrategy():
                 downthrustcount[i] = 0
 
             if df['Low'][i] <= df[ema][i] <= df['High'][i]:
-                balancecount[i]=balancecount[i-1]+1
-            else: balancecount[i]=0
+                balancecount[i] = balancecount[i - 1] + 1
+            else:
+                balancecount[i] = 0
 
         df['upthrustcounter'] = upthrustcount
         df['downthrustcounter'] = downthrustcount
         df['balancecount'] = balancecount
         return df
 
-    def entry(self, upthrustlookback=10, upthrustthreshold=3, rr=3, stopatrmult=1,scaleout="yes"):
+    def entry(self, upthrustlookback=10, upthrustthreshold=3, rr=3, stopatrmult=1, scaleout="yes"):
         df = self.bars
         longentrysig = pd.Series(index=df.index).fillna(0)
         longexitsig = pd.Series(index=df.index).fillna(0)
@@ -95,31 +102,63 @@ class emapbStrategy():
         targetpx = pd.Series(index=df.index).fillna(0)
         stoptrig = pd.Series(index=df.index)
         targettrig = pd.Series(index=df.index)
-        scaleoutpx =pd.Series(index=df.index)
+        scaleouttrig = pd.Series(index=df.index)
+        scaleoutpx = pd.Series(index=df.index)
         tradestatus = pd.Series(index=df.index).fillna(0)
-        
-        def longexitcheck():
+        entrydate = pd.to_datetime(pd.Series(index=df.index).fillna(0))
+
+        def longexitcheck(exitsigval=-1):
             if targetpx[i] > df['High'][i]:
                 targettrig.iloc[i] = "n"
             else:
                 targettrig.iloc[i] = "y"
                 exitpx[i] = targetpx[i]
-                longexitsig[i] = -1
+                longexitsig[i] = exitsigval
+            if stoppx[i] < df['Low'][i]:
+                stoptrig.iloc[i] = "n"
+            else:
+                stoptrig.iloc[i] = "y"
+                exitpx[i] = stoppx[i]
+                longexitsig[i] = exitsigval
+
+        def longexitcheckscale():
+            if targetpx[i]>scaleoutpx[i] > df['High'][i]:
+                targettrig.iloc[i] = "n"
+                scaleouttrig.iloc[i] = "n"
+            elif scaleoutpx[i] <= df['High'][i]:
+                longexitsig[i]= -0.5
+                scaleouttrig.iloc[i] = "y"
+                targettrig.iloc[i]="n"
+                targetpx[i] = entrypx[i] + (entrypx[i] - stoppx[i]) * rr*10
+                scaleoutpx[i]=scaleoutpx[i-1]
+                stoppx[i] = df['High'][i-1]-3*df[atr][i-1]
+                exitpx[i]=scaleoutpx[i]
             if stoppx[i] < df['Low'][i]:
                 stoptrig.iloc[i] = "n"
             else:
                 stoptrig.iloc[i] = "y"
                 exitpx[i] = stoppx[i]
                 longexitsig[i] = -1
-                
-        def longexitcheckscale():
-            if targetpx[i] >= scaleoutpx[i] >
-            
 
+        def longexitcheckscale1():
+            scaleouttrig.iloc[i] = "y"
+            if targetpx[i] > df['High'][i]:
+                targettrig.iloc[i] = "n"
+            else:
+                targettrig.iloc[i] = "y"
+                exitpx[i] = targetpx[i]
+                longexitsig[i] = -0.5
+            if stoppx[i] < df['Low'][i]:
+                stoptrig.iloc[i] = "n"
+            else:
+                stoptrig.iloc[i] = "y"
+                exitpx[i] = stoppx[i]
+                longexitsig[i] = -0.5
 
-        for i in range(1, len(df.index)): #this loop cycles thru 1. entry signal, 2. set trade params, 3. checks for trade status
+        for i in range(1, len(df.index)):  # this loop cycles thru 1. entry signal, 2. set trade params, 3. checks for trade status
             # criteria for triggering an entry signal: 1. upthrust (close over upperkeltband) within lookback period, 2. no trades currently on, 3. prior bar EMA between HL
-            if tradestatus[i - 1] == 0 and any(df['upthrustcounter'][(i - upthrustlookback):i] >= upthrustthreshold) and (
+            if tradestatus[i - 1] == 0 and any(
+                    df['upthrustcounter'][(i - upthrustlookback):i] >= upthrustthreshold) and (
                     df['Low'][i - 1] <= df[ema][i - 1] <= df['High'][i - 1]):
                 longentrysig[i] = 1
             else:
@@ -127,25 +166,37 @@ class emapbStrategy():
             if longentrysig[i] == 1:
                 # upon entry logic, set entry, stop, target prices
                 entrypx[i] = df['Open'][i]
-                stoppx[i] = entrypx[i]- df[atr][i-1]*stopatrmult
-                targetpx[i] = entrypx[i] + (entrypx[i] - stoppx[i]) * rr
-                scaleoutpx[i]=
+                stoppx[i] = entrypx[i] - df[atr][i - 1] * stopatrmult
+                targetpx[i] = entrypx[i] + (entrypx[i] - stoppx[i]) * rr*2
+                scaleoutpx[i] = entrypx[i] + (entrypx[i] - stoppx[i]) * rr
+                entrydate[i] = df.index[i]
                 tradestatus[i] = 1
-                longexitcheck()##stoplogic on the current bar
+                longexitcheckscale()  ##stoplogic on the current bar
 
             elif tradestatus[i - 1] == 1:
                 entrypx[i] = entrypx[i - 1]
-                stoppx[i] = df['kelt_lb'][i - 1] #trailing stop
+                stoppx[i] = stoppx[i - 1]  # trailing stop
                 targetpx[i] = targetpx[i - 1]
-                longexitcheck()
+                scaleoutpx[i] = scaleoutpx [i-1]
+                entrydate[i]=entrydate[i-1]
+                longexitcheckscale()
+            elif tradestatus[i - 1] == 0.5:
+                entrypx[i] = entrypx[i - 1]
+                stoppx[i] = df['High'][(i - 10):(i-1)].max()- (3*df[atr][i-1])  # trailing stop
+                targetpx[i] = targetpx[i - 1]
+                entrydate[i]=entrydate[i-1]
+                longexitcheckscale1()
             else:
                 entrypx[i] = 0
                 stoppx[i] = 0
                 targetpx[i] = 0
+                entrydate[i]=entrydate[i-1]
 
             ##tradestatus
-            if (longentrysig[i] == 1) and (targettrig.iloc[i] == "n") and (stoptrig.iloc[i] == "n"):
+            if (longentrysig[i] == 1) and (targettrig.iloc[i] == "n") and (stoptrig.iloc[i] == "n") and (scaleouttrig.iloc[i] =="n"):
                 tradestatus[i] = 1
+            elif (targettrig.iloc[i] == "n") and (stoptrig.iloc[i] == "n") and (scaleouttrig.iloc[i] =="y"):
+                tradestatus[i] = 0.5
             elif (targettrig.iloc[i] == "n") and (stoptrig.iloc[i] == "n"):
                 tradestatus[i] = tradestatus[i - 1]
             else:
@@ -157,9 +208,12 @@ class emapbStrategy():
         df['exitpx'] = exitpx
         df['stoppx'] = stoppx
         df['targetpx'] = targetpx
+        df['scaleoutpx'] = scaleoutpx
         df['stoptrig'] = stoptrig
         df['targettrig'] = targettrig
+        df['scaleouttrig'] =scaleouttrig
         df['tradestatus'] = tradestatus
+        df['entrydate'] = entrydate
         return df
 
 
@@ -188,6 +242,7 @@ class PortfolioGenerate():
         portfolio['tradestatus'] = self.bars['tradestatus']
         portfolio['entrypx'] = self.bars['entrypx']
         portfolio['exitpx'] = self.bars['exitpx']
+        portfolio['stoppx']=self.bars['stoppx']
         portfolio['ClosePx'] = self.bars['Close']
         entrytrade = pd.Series(index=self.bars.index).fillna(0)
         closetradeholding = pd.Series(index=self.bars.index).fillna(0)
@@ -201,9 +256,9 @@ class PortfolioGenerate():
                         portfolio['longentrysig'][i] + portfolio['longexitsig'][i])
                 entrytrade[i] = self.bars['entrypx'][i] * suggestedpositionsize
                 exittrade[i] = portfolio['exitpx'][i] * suggestedpositionsize
-            elif portfolio['longexitsig'][i] == -1:
-                exittrade[i] = portfolio['exitpx'][i] * suggestedpositionsize
-                closetradeholding[i] = 0
+            elif portfolio['longexitsig'][i] < 0:
+                exittrade[i] = portfolio['exitpx'][i] * suggestedpositionsize * -portfolio['longexitsig'][i]
+                closetradeholding[i] = closetradeholding[i-1] + suggestedpositionsize*portfolio['longexitsig'][i]
             else:
                 closetradeholding[i] = closetradeholding[i - 1]
 
@@ -254,7 +309,7 @@ class Analytics():
         statistics = {}
 
         # Equity statistics
-        statistics["Sharpe"] = round(np.sqrt(252) * (np.mean(returns_s)) / np.std(returns_s),2)
+        statistics["Sharpe"] = round(np.sqrt(252) * (np.mean(returns_s)) / np.std(returns_s), 2)
         statistics["max_drawdown"] = max_dd
         statistics["max_drawdown_pct"] = max_dd
         statistics["max_drawdown_duration"] = dd_dur
@@ -263,11 +318,11 @@ class Analytics():
 
     def summaryanalytics(self):
         ##Analytics
-        entry = pd.Series(portfolio['entrypx'].loc[portfolio.longentrysig == 1.0].values)
-        stop = pd.Series(signals['stoppx'].loc[portfolio.longentrysig == 1.0].values)
-        exit = pd.Series(portfolio['exitpx'].loc[portfolio.longexitsig == -1.0].values)
-        entrydate = pd.Series(portfolio.loc[portfolio.longentrysig == 1.0].index)
-        exitdate = pd.Series(portfolio.loc[portfolio.longexitsig == -1.0].index)
+        entry = pd.Series(portfolio['entrypx'][signals['entrydate'][portfolio.longexitsig < 0].tolist()].values)
+        stop = pd.Series(portfolio['stoppx'].loc[portfolio.longentrysig < 0].values)
+        exit = pd.Series(portfolio['exitpx'].loc[portfolio.longexitsig < 0].values)
+        entrydate = pd.Series(signals['entrydate'][portfolio.longexitsig < 0].tolist())
+        exitdate = pd.Series(portfolio.loc[portfolio.longexitsig < 0].index)
         favexcursion = [signals['High'].loc[x:y].max() for x, y in zip(entrydate, exitdate)]
         adverseexcursion = [signals['Low'].loc[x:y].min() for x, y in zip(entrydate, exitdate)]
         tradeduration = [len(signals.loc[x:y].index) for x, y in zip(entrydate, exitdate)]
@@ -295,7 +350,7 @@ class Analytics():
         enddate = signals.index[-1]
         cagr = 100 * ((portfolio['total'].iloc[-1] / 100000) ** (1 / ((enddate - startdate).days / 365)) - 1)
         bhcagr = 100 * ((portfolio['ClosePx'].iloc[-1] / portfolio['ClosePx'].iloc[0]) ** (
-                    1 / ((enddate - startdate).days / 365)) - 1)
+                1 / ((enddate - startdate).days / 365)) - 1)
 
         print("On {}, Acc Equity compounded at {}% CAGR vs BuyHold at {}% CAGR".format(symbol, round(cagr, 2),
                                                                                        round(bhcagr, 2)))
@@ -306,24 +361,26 @@ class Analytics():
 
         return SummaryTable
 
+
 if __name__ == "__main__":
     # Obtain daily bars of AAPL from Yahoo Finance for the period
-    symbol = 'nflx'
+    symbol = 'MSFT'
     bars = web.DataReader(symbol, 'yahoo', datetime.datetime(2010, 1, 1), datetime.datetime(2019, 1, 20))
     st = emapbStrategy(symbol, bars, atr_period=10, atr_multiplier=2.25, pullback_period=5)
     signals = st.ATR()
     signals = st.emakeltner(emaperiod=20)
     signals = st.HLCounter(atrfilter=2, volumefilter=1.5, volumema=20)
-    signals = st.entry(upthrustlookback=15, upthrustthreshold=3, rr=3,stopatrmult=1.5)
-    returns = PortfolioGenerate(symbol, bars, signals, initial_capital=100000.0,risk=0.02)
+    signals = st.entry(upthrustlookback=15, upthrustthreshold=3, rr=3, stopatrmult=1.5)
+    returns = PortfolioGenerate(symbol, bars, signals, initial_capital=100000.0, risk=0.02)
     returns = returns.backtest_portfolio()
     Analytics().getresults()
     summtable = Analytics().summaryanalytics()
+
     writer = pd.ExcelWriter('outputsheet.xlsx')
     signals.to_excel(writer, 'signal')
     returns.to_excel(writer, 'return')
     summtable.to_excel(writer, 'tradesummary')
+
     # Close the Pandas Excel writer and output the Excel file.
     writer.save()
-
-
+    print(portfolio['stoppx'])
