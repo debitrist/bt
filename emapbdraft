@@ -121,7 +121,7 @@ class emapbStrategy():
                 exitpx[i] = stoppx[i]
                 longexitsig[i] = exitsigval
 
-        def longexitcheckscale():
+        def longexitcheckscale(): #function for scaling out
             if targetpx[i]>scaleoutpx[i] > df['High'][i]:
                 targettrig.iloc[i] = "n"
                 scaleouttrig.iloc[i] = "n"
@@ -140,7 +140,7 @@ class emapbStrategy():
                 exitpx[i] = stoppx[i]
                 longexitsig[i] = -1
 
-        def longexitcheckscale1():
+        def longexitcheckscale1(): # function which kicks in after profit taken on 1st leg
             scaleouttrig.iloc[i] = "y"
             if targetpx[i] > df['High'][i]:
                 targettrig.iloc[i] = "n"
@@ -169,7 +169,7 @@ class emapbStrategy():
                 stoppx[i] = entrypx[i] - df[atr][i - 1] * stopatrmult
                 targetpx[i] = entrypx[i] + (entrypx[i] - stoppx[i]) * rr*2
                 scaleoutpx[i] = entrypx[i] + (entrypx[i] - stoppx[i]) * rr
-                entrydate[i] = df.index[i]
+                entrydate[i] = df.index[i] ##record entrydate upon entry
                 tradestatus[i] = 1
                 longexitcheckscale()  ##stoplogic on the current bar
 
@@ -242,7 +242,7 @@ class PortfolioGenerate():
         portfolio['tradestatus'] = self.bars['tradestatus']
         portfolio['entrypx'] = self.bars['entrypx']
         portfolio['exitpx'] = self.bars['exitpx']
-        portfolio['stoppx']=self.bars['stoppx']
+        portfolio['stoppx'] = self.bars['stoppx']
         portfolio['ClosePx'] = self.bars['Close']
         entrytrade = pd.Series(index=self.bars.index).fillna(0)
         closetradeholding = pd.Series(index=self.bars.index).fillna(0)
@@ -319,10 +319,11 @@ class Analytics():
     def summaryanalytics(self):
         ##Analytics
         entry = pd.Series(portfolio['entrypx'][signals['entrydate'][portfolio.longexitsig < 0].tolist()].values)
-        stop = pd.Series(portfolio['stoppx'].loc[portfolio.longentrysig < 0].values)
+        stop = pd.Series(portfolio['stoppx'][signals['entrydate'][portfolio.longexitsig < 0].tolist()].values)
         exit = pd.Series(portfolio['exitpx'].loc[portfolio.longexitsig < 0].values)
         entrydate = pd.Series(signals['entrydate'][portfolio.longexitsig < 0].tolist())
         exitdate = pd.Series(portfolio.loc[portfolio.longexitsig < 0].index)
+        exitsig = pd.Series(portfolio['longexitsig'][portfolio.longexitsig < 0].tolist())
         favexcursion = [signals['High'].loc[x:y].max() for x, y in zip(entrydate, exitdate)]
         adverseexcursion = [signals['Low'].loc[x:y].min() for x, y in zip(entrydate, exitdate)]
         tradeduration = [len(signals.loc[x:y].index) for x, y in zip(entrydate, exitdate)]
@@ -338,6 +339,8 @@ class Analytics():
         SummaryTable['Returns%'] = 100 * ((SummaryTable['ExitPx'] / SummaryTable['EntryPx']) - 1)
         SummaryTable['MFE RR'] = -100 * ((SummaryTable['MFE'] / SummaryTable['EntryPx']) - 1) / SummaryTable['Risk%']
         SummaryTable['MAE RR'] = -100 * ((SummaryTable['MAE'] / SummaryTable['EntryPx']) - 1) / SummaryTable['Risk%']
+        SummaryTable['Gross RR'] = SummaryTable['Returns%']/-SummaryTable['Risk%']
+        SummaryTable['Adj RR'] = (exitsig * SummaryTable['Returns%'])/SummaryTable['Risk%']
 
         winners = len(SummaryTable[SummaryTable['Returns%'] > 0])
         winavgmfe = SummaryTable['MFE RR'].loc[SummaryTable['Returns%'] > 0].median()
@@ -383,4 +386,3 @@ if __name__ == "__main__":
 
     # Close the Pandas Excel writer and output the Excel file.
     writer.save()
-    print(portfolio['stoppx'])
