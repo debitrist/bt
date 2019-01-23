@@ -130,9 +130,9 @@ class emapbStrategy():
                 scaleouttrig.iloc[i] = "y"
                 targettrig.iloc[i]="n"
                 targetpx[i] = entrypx[i] + (entrypx[i] - stoppx[i]) * rr*10
+                exitpx[i]=scaleoutpx[i]
                 scaleoutpx[i]=scaleoutpx[i-1]
                 stoppx[i] = df['High'][i-1]-3*df[atr][i-1]
-                exitpx[i]=scaleoutpx[i]
             if stoppx[i] < df['Low'][i]:
                 stoptrig.iloc[i] = "n"
             else:
@@ -182,7 +182,7 @@ class emapbStrategy():
                 longexitcheckscale()
             elif tradestatus[i - 1] == 0.5:
                 entrypx[i] = entrypx[i - 1]
-                stoppx[i] = df['High'][(i - 10):(i-1)].max()- (3*df[atr][i-1])  # trailing stop
+                stoppx[i] = max(df['High'][(i - 10):(i-1)].max()- (3*df[atr][i-1]),stoppx[i-1])  # trailing stop
                 targetpx[i] = targetpx[i - 1]
                 entrydate[i]=entrydate[i-1]
                 longexitcheckscale1()
@@ -328,61 +328,123 @@ class Analytics():
         adverseexcursion = [signals['Low'].loc[x:y].min() for x, y in zip(entrydate, exitdate)]
         tradeduration = [len(signals.loc[x:y].index) for x, y in zip(entrydate, exitdate)]
 
+        entryconsol = pd.Series(portfolio['entrypx'].loc[portfolio.longentrysig == 1.0].values)
+        stopconsol = pd.Series(signals['stoppx'].loc[portfolio.longentrysig == 1.0].values)
+        exitconsol = pd.Series([exit[entry==x].mean() for x in entryconsol])
+        entrydateconsol = pd.Series(portfolio.loc[portfolio.longentrysig == 1.0].index)
+        exitdateconsol = pd.Series([exitdate[entry==x].max() for x in entryconsol])
+        favexcursionconsol = [signals['High'].loc[x:y].max() for x, y in zip(entrydateconsol, exitdateconsol)]
+        adverseexcursionconsol = [signals['Low'].loc[x:y].min() for x, y in zip(entrydateconsol, exitdateconsol)]
+        tradedurationconsol = [len(signals.loc[x:y].index) for x, y in zip(entrydateconsol, exitdateconsol)]
+
+        SummaryTableConsol = pd.concat(
+            [pd.Series(entryconsol, name="EntryPx"), pd.Series(stopconsol, name="StopPx"), pd.Series(exitconsol, name="ExitPx"),
+             pd.Series(favexcursionconsol, name="MFE"), pd.Series(adverseexcursionconsol, name="MAE"),
+             pd.Series(entrydateconsol, name="EntryDate"), pd.Series(exitdateconsol, name="exitdate"),
+             pd.Series(tradedurationconsol, name="TradeDur")], axis=1)
+
+
         ##SummaryTable
-        SummaryTable = pd.concat(
+        global SummaryTableDetail
+        SummaryTableDetail = pd.concat(
             [pd.Series(entry, name="EntryPx"), pd.Series(stop, name="StopPx"), pd.Series(exit, name="ExitPx"),
              pd.Series(favexcursion, name="MFE"), pd.Series(adverseexcursion, name="MAE"),
              pd.Series(entrydate, name="EntryDate"), pd.Series(exitdate, name="exitdate"),
              pd.Series(tradeduration, name="TradeDur")], axis=1)
 
-        SummaryTable['Risk%'] = 100 * ((SummaryTable['StopPx'] / SummaryTable['EntryPx']) - 1)
-        SummaryTable['Returns%'] = 100 * ((SummaryTable['ExitPx'] / SummaryTable['EntryPx']) - 1)
-        SummaryTable['MFE RR'] = -100 * ((SummaryTable['MFE'] / SummaryTable['EntryPx']) - 1) / SummaryTable['Risk%']
-        SummaryTable['MAE RR'] = -100 * ((SummaryTable['MAE'] / SummaryTable['EntryPx']) - 1) / SummaryTable['Risk%']
-        SummaryTable['Gross RR'] = SummaryTable['Returns%']/-SummaryTable['Risk%']
-        SummaryTable['Adj RR'] = (exitsig * SummaryTable['Returns%'])/SummaryTable['Risk%']
+        def sumtablecalcsnowords(df):
+            df['Risk%'] = 100 * ((df['StopPx'] / df['EntryPx']) - 1)
+            df['Returns%'] = 100 * ((df['ExitPx'] / df['EntryPx']) - 1)
+            df['MFE RR'] = -100 * ((df['MFE'] / df['EntryPx']) - 1) / df['Risk%']
+            df['MAE RR'] = -100 * ((df['MAE'] / df['EntryPx']) - 1) / df['Risk%']
+            df['Gross RR'] = df['Returns%'] / -df['Risk%']
+            df['Adj RR'] = (exitsig * df['Returns%']) / df['Risk%']
 
-        winners = len(SummaryTable[SummaryTable['Returns%'] > 0])
-        winavgmfe = SummaryTable['MFE RR'].loc[SummaryTable['Returns%'] > 0].median()
-        winavgmae = SummaryTable['MAE RR'].loc[SummaryTable['Returns%'] > 0].median()
-        loseavgmfe = SummaryTable['MFE RR'].loc[SummaryTable['Returns%'] < 0].median()
-        loseavgmae = SummaryTable['MAE RR'].loc[SummaryTable['Returns%'] < 0].median()
-        windur = SummaryTable['TradeDur'].loc[SummaryTable['Returns%'] > 0].median()
-        losedur = SummaryTable['TradeDur'].loc[SummaryTable['Returns%'] < 0].median()
-        startdate = signals.index[0]
-        enddate = signals.index[-1]
-        cagr = 100 * ((portfolio['total'].iloc[-1] / 100000) ** (1 / ((enddate - startdate).days / 365)) - 1)
-        bhcagr = 100 * ((portfolio['ClosePx'].iloc[-1] / portfolio['ClosePx'].iloc[0]) ** (
-                1 / ((enddate - startdate).days / 365)) - 1)
+            return df
 
-        print("On {}, Acc Equity compounded at {}% CAGR vs BuyHold at {}% CAGR".format(symbol, round(cagr, 2),
-                                                                                       round(bhcagr, 2)))
-        print("Winrate is {}% with {} winners".format(round(100 * winners / len(SummaryTable), 1), winners))
-        print("Winner MFE is {} R, MAE is {} R".format(round(winavgmfe, 2), round(winavgmae, 2)))
-        print("Loser MFE is {} R, MAE is {} R".format(round(loseavgmfe, 2), round(loseavgmae, 2)))
-        print("Winner duration {} days, Loser duration {} days".format(windur, losedur))
+        def sumtablecalcs(df):
+            df['Risk%'] = 100 * ((df['StopPx'] / df['EntryPx']) - 1)
+            df['Returns%'] = 100 * ((df['ExitPx'] / df['EntryPx']) - 1)
+            df['MFE RR'] = -100 * ((df['MFE'] / df['EntryPx']) - 1) / df['Risk%']
+            df['MAE RR'] = -100 * ((df['MAE'] / df['EntryPx']) - 1) / df['Risk%']
+            df['Gross RR'] = df['Returns%'] / -df['Risk%']
 
-        return SummaryTable
+            winners = len(df[df['Returns%'] > 0])
+            winavgmfe = df['MFE RR'].loc[df['Returns%'] > 0].median()
+            winavgmae = df['MAE RR'].loc[df['Returns%'] > 0].median()
+            loseavgmfe = df['MFE RR'].loc[df['Returns%'] < 0].median()
+            loseavgmae = df['MAE RR'].loc[df['Returns%'] < 0].median()
+            windur = df['TradeDur'].loc[df['Returns%'] > 0].median()
+            losedur = df['TradeDur'].loc[df['Returns%'] < 0].median()
+            avgrtrade = df['Gross RR'].mean()
+            avgrwin = df['Gross RR'].loc[df['Returns%'] > 0].mean()
+            avgrlose = df['Gross RR'].loc[df['Returns%'] < 0].mean()
+            startdate = signals.index[0]
+            enddate = signals.index[-1]
+            cagr = 100 * ((portfolio['total'].iloc[-1] / 100000) ** (1 / ((enddate - startdate).days / 365)) - 1)
+            bhcagr = 100 * ((portfolio['ClosePx'].iloc[-1] / portfolio['ClosePx'].iloc[0]) ** (
+                    1 / ((enddate - startdate).days / 365)) - 1)
+
+            print("On {}, Acc Equity compounded at {}% CAGR vs BuyHold at {}% CAGR".format(symbol, round(cagr, 2),
+                                                                                           round(bhcagr, 2)))
+            print("Winrate is {}% with {} winners, {} trades".format(round(100 * winners / len(df), 1), winners, len(df)))
+            print("Avg Trade is {}R, Winners are {}R, Losers are {}R".format(round(avgrtrade,2),round(avgrwin,2),round(avgrlose,2) ))
+            print("Winner MFE is {} R, MAE is {} R".format(round(winavgmfe, 2), round(winavgmae, 2)))
+            print("Loser MFE is {} R, MAE is {} R".format(round(loseavgmfe, 2), round(loseavgmae, 2)))
+            print("Winner duration {} days, Loser duration {} days".format(windur, losedur))
+
+            return df
+
+        SummaryTableConsol = sumtablecalcs(SummaryTableConsol)
+        SummaryTableDetail = sumtablecalcsnowords(SummaryTableDetail)
+
+        return SummaryTableConsol, SummaryTableDetail
 
 
 if __name__ == "__main__":
     # Obtain daily bars of AAPL from Yahoo Finance for the period
-    symbol = 'MSFT'
+    symbol = 'AMZN'
     bars = web.DataReader(symbol, 'yahoo', datetime.datetime(2010, 1, 1), datetime.datetime(2019, 1, 20))
     st = emapbStrategy(symbol, bars, atr_period=10, atr_multiplier=2.25, pullback_period=5)
     signals = st.ATR()
     signals = st.emakeltner(emaperiod=20)
     signals = st.HLCounter(atrfilter=2, volumefilter=1.5, volumema=20)
-    signals = st.entry(upthrustlookback=15, upthrustthreshold=3, rr=3, stopatrmult=1.5)
+    signals = st.entry(upthrustlookback=15, upthrustthreshold=3, rr=2, stopatrmult=2)
     returns = PortfolioGenerate(symbol, bars, signals, initial_capital=100000.0, risk=0.02)
     returns = returns.backtest_portfolio()
     Analytics().getresults()
-    summtable = Analytics().summaryanalytics()
+    summtableconsol, summtabledetail = Analytics().summaryanalytics()
 
     writer = pd.ExcelWriter('outputsheet.xlsx')
     signals.to_excel(writer, 'signal')
     returns.to_excel(writer, 'return')
-    summtable.to_excel(writer, 'tradesummary')
+    summtableconsol.to_excel(writer, 'tradesummconsol')
+    summtabledetail.to_excel(writer, 'tradesumdet')
 
     # Close the Pandas Excel writer and output the Excel file.
     writer.save()
+
+   # Plot two charts to assess trades and equity curve
+    fig = plt.figure()
+    fig.patch.set_facecolor('white')  # Set the outer colour to white
+    ax1 = fig.add_subplot(211, ylabel='Price in $')
+
+    # Plot the AAPL closing price overlaid with the indicator
+    bars['Close'].plot(ax=ax1, color='r', lw=2.)
+    signals[[ema]].plot(ax=ax1, lw=1.)
+
+    # Plot the "buy" trades against AAPL
+    ax1.plot(portfolio.loc[portfolio.longentrysig == 1.0].index,
+             portfolio['entrypx'].loc[portfolio.longentrysig == 1.0],
+             '^', markersize=5, color='g')
+
+    # Plot the "exit" trades against AAPL
+    ax1.plot(portfolio.loc[portfolio.longexitsig < 0].index,
+             portfolio['exitpx'].loc[portfolio.longexitsig < 0], '^', markersize=5, color='k')
+
+    # Plot the equity curve in dollars
+    ax2 = fig.add_subplot(212, ylabel='Portfolio value in $')
+    returns['total'].plot(ax=ax2, lw=2.)
+
+    # Plot the figure
+    plt.show()
