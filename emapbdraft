@@ -81,7 +81,7 @@ class emapbStrategy():
                 downthrustcount[i] = downthrustcount[i - 1] + 0.5
             else:
                 downthrustcount[i] = 0
-
+            #### PB to EMA Count
             if df['Low'][i] <= df[ema][i] <= df['High'][i]:
                 balancecount[i] = balancecount[i - 1] + 1
             else:
@@ -92,10 +92,12 @@ class emapbStrategy():
         df['balancecount'] = balancecount
         return df
 
-    def entry(self, upthrustlookback=10, upthrustthreshold=3, rr=3, stopatrmult=1, scaleout="yes"):
+    def entry(self, upthrustlookback=10, upthrustthreshold=3, rr=3, stopatrmult=1, scaleout="y", longonly="n"):
         df = self.bars
         longentrysig = pd.Series(index=df.index).fillna(0)
         longexitsig = pd.Series(index=df.index).fillna(0)
+        shortentrysig = pd.Series(index=df.index).fillna(0)
+        shortexitsig = pd.Series(index=df.index).fillna(0)
         entrypx = pd.Series(index=df.index).fillna(0)
         exitpx = pd.Series(index=df.index).fillna(0)
         stoppx = pd.Series(index=df.index).fillna(0)
@@ -107,22 +109,8 @@ class emapbStrategy():
         tradestatus = pd.Series(index=df.index).fillna(0)
         entrydate = pd.to_datetime(pd.Series(index=df.index).fillna(0))
 
-        def longexitcheck(exitsigval=-1):
-            if targetpx[i] > df['High'][i]:
-                targettrig.iloc[i] = "n"
-            else:
-                targettrig.iloc[i] = "y"
-                exitpx[i] = targetpx[i]
-                longexitsig[i] = exitsigval
-            if stoppx[i] < df['Low'][i]:
-                stoptrig.iloc[i] = "n"
-            else:
-                stoptrig.iloc[i] = "y"
-                exitpx[i] = stoppx[i]
-                longexitsig[i] = exitsigval
-
-        def longexitcheckscale(): #function for scaling out
-            if targetpx[i]>scaleoutpx[i] > df['High'][i]:
+        def longexitcheckscale(): #exit for scaling out on long entries
+            if scaleoutpx[i] > df['High'][i]:
                 targettrig.iloc[i] = "n"
                 scaleouttrig.iloc[i] = "n"
             elif scaleoutpx[i] <= df['High'][i]:
@@ -140,52 +128,88 @@ class emapbStrategy():
                 exitpx[i] = stoppx[i]
                 longexitsig[i] = -1
 
-        def longexitcheckscale1(): # function which kicks in after profit taken on 1st leg
-            scaleouttrig.iloc[i] = "y"
+        def longexitcheck(exitsigval=-1): # exitchecks for allinout on long entries
             if targetpx[i] > df['High'][i]:
                 targettrig.iloc[i] = "n"
             else:
                 targettrig.iloc[i] = "y"
                 exitpx[i] = targetpx[i]
-                longexitsig[i] = -0.5
+                longexitsig[i] = exitsigval
             if stoppx[i] < df['Low'][i]:
                 stoptrig.iloc[i] = "n"
             else:
                 stoptrig.iloc[i] = "y"
                 exitpx[i] = stoppx[i]
-                longexitsig[i] = -0.5
+                longexitsig[i] = exitsigval
+
+        def shortexitcheck(): # exit checks for allinout on short entries
+            if targetpx[i] < df['Low'][i]:
+                targettrig.iloc[i] = "n"
+            else:
+                targettrig.iloc[i] = "y"
+                exitpx[i] = targetpx[i]
+                shortexitsig[i] = 1
+            if stoppx[i] > df['High'][i]:
+                stoptrig.iloc[i] = "n"
+            else:
+                stoptrig.iloc[i] = "y"
+                exitpx[i] = stoppx[i]
+                shortexitsig[i] = 1
 
         for i in range(1, len(df.index)):  # this loop cycles thru 1. entry signal, 2. set trade params, 3. checks for trade status
-            # criteria for triggering an entry signal: 1. upthrust (close over upperkeltband) within lookback period, 2. no trades currently on, 3. prior bar EMA between HL
-            if tradestatus[i - 1] == 0 and any(
-                    df['upthrustcounter'][(i - upthrustlookback):i] >= upthrustthreshold) and (
+            # entry signal criteria: 1. upthrust (close over upperkeltband) within lookback period, 2. no trades currently on, 3. prior bar EMA between HL
+            if tradestatus[i - 1] == 0 and any(df['upthrustcounter'][(i - upthrustlookback):i] >= upthrustthreshold) and (
                     df['Low'][i - 1] <= df[ema][i - 1] <= df['High'][i - 1]):
                 longentrysig[i] = 1
-            else:
+            elif longonly == "y" :
                 longentrysig[i] = 0
-            if longentrysig[i] == 1:
+            ##short entry signal criteria
+            elif tradestatus[i - 1] == 0 and any(df['downthrustcounter'][(i - upthrustlookback):i] >= upthrustthreshold) and (
+                    df['Low'][i - 1] <= df[ema][i - 1] <= df['High'][i - 1]):
+                shortentrysig[i] = -1
+            else: shortentrysig[i] = 0
+
+            if longentrysig[i] == 1: ##long entry mgmt
                 # upon entry logic, set entry, stop, target prices
                 entrypx[i] = df['Open'][i]
                 stoppx[i] = entrypx[i] - df[atr][i - 1] * stopatrmult
-                targetpx[i] = entrypx[i] + (entrypx[i] - stoppx[i]) * rr*2
+                targetpx[i] = entrypx[i] + (entrypx[i] - stoppx[i]) * rr
                 scaleoutpx[i] = entrypx[i] + (entrypx[i] - stoppx[i]) * rr
                 entrydate[i] = df.index[i] ##record entrydate upon entry
                 tradestatus[i] = 1
-                longexitcheckscale()  ##stoplogic on the current bar
-
-            elif tradestatus[i - 1] == 1:
+                ##stoplogic on the current bar
+                if scaleout == "y":
+                    longexitcheckscale()
+                else: longexitcheck(exitsigval=-1)
+            elif shortentrysig[i] == -1: ##short entry mgmt
+                entrypx[i] = df['Open'][i]
+                stoppx[i] = entrypx[i] + df[atr][i - 1] * stopatrmult
+                targetpx[i] = entrypx[i] + (entrypx[i] - stoppx[i]) * rr
+                entrydate[i] = df.index[i]  ##record entrydate upon entry
+                tradestatus[i] = -1
+                shortexitcheck()
+            elif tradestatus[i - 1] == 1: ##long trade mgmt
                 entrypx[i] = entrypx[i - 1]
-                stoppx[i] = stoppx[i - 1]  # trailing stop
+                stoppx[i] = stoppx[i - 1]
                 targetpx[i] = targetpx[i - 1]
                 scaleoutpx[i] = scaleoutpx [i-1]
                 entrydate[i]=entrydate[i-1]
-                longexitcheckscale()
-            elif tradestatus[i - 1] == 0.5:
+                if scaleout == "y":
+                    longexitcheckscale()
+                else: longexitcheck(exitsigval=-1)
+            elif tradestatus[i - 1] == -1: ##short trade mgmt
+                entrypx[i] = entrypx[i - 1]
+                stoppx[i] = stoppx[i - 1]
+                targetpx[i] = targetpx[i - 1]
+                entrydate[i] = entrydate[i - 1]
+                shortexitcheck()
+            elif tradestatus[i - 1] == 0.5: ##scaling out stop
                 entrypx[i] = entrypx[i - 1]
                 stoppx[i] = max(df['High'][(i - 10):(i-1)].max()- (3*df[atr][i-1]),stoppx[i-1])  # trailing stop
                 targetpx[i] = targetpx[i - 1]
                 entrydate[i]=entrydate[i-1]
-                longexitcheckscale1()
+                scaleouttrig.iloc[i] = "y"
+                longexitcheck(exitsigval=-0.5)
             else:
                 entrypx[i] = 0
                 stoppx[i] = 0
@@ -193,8 +217,10 @@ class emapbStrategy():
                 entrydate[i]=entrydate[i-1]
 
             ##tradestatus
-            if (longentrysig[i] == 1) and (targettrig.iloc[i] == "n") and (stoptrig.iloc[i] == "n") and (scaleouttrig.iloc[i] =="n"):
+            if (longentrysig[i] == 1) and (targettrig.iloc[i] == "n") and (stoptrig.iloc[i] == "n") and (scaleouttrig.iloc[i] != "y"):
                 tradestatus[i] = 1
+            elif (shortentrysig[i] == -1) and (targettrig.iloc[i] == "n") and (stoptrig.iloc[i] == "n") and (scaleouttrig.iloc[i] != "y"):
+                tradestatus[i] = -1
             elif (targettrig.iloc[i] == "n") and (stoptrig.iloc[i] == "n") and (scaleouttrig.iloc[i] =="y"):
                 tradestatus[i] = 0.5
             elif (targettrig.iloc[i] == "n") and (stoptrig.iloc[i] == "n"):
@@ -204,6 +230,8 @@ class emapbStrategy():
 
         df['longentrysig'] = longentrysig
         df['longexitsig'] = longexitsig
+        df['shortentrysig'] = shortentrysig
+        df['shortexitsig'] = shortexitsig
         df['entrypx'] = entrypx
         df['exitpx'] = exitpx
         df['stoppx'] = stoppx
@@ -239,6 +267,8 @@ class PortfolioGenerate():
         portfolio = pd.DataFrame(index=self.bars.index).fillna(0)
         portfolio['longentrysig'] = self.bars['longentrysig']
         portfolio['longexitsig'] = self.bars['longexitsig']
+        portfolio['shortentrysig'] = self.bars['shortentrysig']
+        portfolio['shortexitsig'] = self.bars['shortexitsig']
         portfolio['tradestatus'] = self.bars['tradestatus']
         portfolio['entrypx'] = self.bars['entrypx']
         portfolio['exitpx'] = self.bars['exitpx']
@@ -249,16 +279,16 @@ class PortfolioGenerate():
         exittrade = pd.Series(index=self.bars.index).fillna(0)
 
         for i in range(1, len(portfolio.index)):
-            if portfolio['longentrysig'][i] == 1:
+            if portfolio['longentrysig'][i] == 1 or portfolio['shortentrysig'][i] == -1:
                 suggestedpositionsize = self.initial_capital * self.risk / (
                         self.bars['entrypx'][i] - self.bars['stoppx'][i])
                 closetradeholding[i] = suggestedpositionsize * (
-                        portfolio['longentrysig'][i] + portfolio['longexitsig'][i])
+                        portfolio['longentrysig'][i] + portfolio['longexitsig'][i] - portfolio['shortentrysig'][i]-portfolio['shortexitsig'][i])
                 entrytrade[i] = self.bars['entrypx'][i] * suggestedpositionsize
                 exittrade[i] = portfolio['exitpx'][i] * suggestedpositionsize
-            elif portfolio['longexitsig'][i] < 0:
-                exittrade[i] = portfolio['exitpx'][i] * suggestedpositionsize * -portfolio['longexitsig'][i]
-                closetradeholding[i] = closetradeholding[i-1] + suggestedpositionsize*portfolio['longexitsig'][i]
+            elif portfolio['longexitsig'][i] < 0 or portfolio['shortexitsig'][i] > 0:
+                exittrade[i] = portfolio['exitpx'][i] * suggestedpositionsize * (-portfolio['longexitsig'][i]+portfolio['shortexitsig'][i])
+                closetradeholding[i] = closetradeholding[i-1] + suggestedpositionsize*(portfolio['longexitsig'][i]-portfolio['shortexitsig'][i])
             else:
                 closetradeholding[i] = closetradeholding[i - 1]
 
@@ -268,6 +298,7 @@ class PortfolioGenerate():
         portfolio['cash'] = self.initial_capital + (portfolio['trades']).cumsum()
         portfolio['total'] = portfolio['cash'] + portfolio['holdings']
         portfolio['returns'] = portfolio['total'].pct_change()
+        portfolio['tradetype'] = portfolio['tradestatus'].diff()
         return portfolio
 
 
@@ -318,6 +349,8 @@ class Analytics():
 
     def summaryanalytics(self):
         ##Analytics
+        global tradetype
+        tradetype = pd.Series(portfolio['tradetype'][portfolio.tradetype != 0].tolist())
         entry = pd.Series(portfolio['entrypx'][signals['entrydate'][portfolio.longexitsig < 0].tolist()].values)
         stop = pd.Series(portfolio['stoppx'][signals['entrydate'][portfolio.longexitsig < 0].tolist()].values)
         exit = pd.Series(portfolio['exitpx'].loc[portfolio.longexitsig < 0].values)
@@ -409,7 +442,7 @@ if __name__ == "__main__":
     signals = st.ATR()
     signals = st.emakeltner(emaperiod=20)
     signals = st.HLCounter(atrfilter=2, volumefilter=1.5, volumema=20)
-    signals = st.entry(upthrustlookback=15, upthrustthreshold=3, rr=2, stopatrmult=2)
+    signals = st.entry(upthrustlookback=15, upthrustthreshold=3, rr=2, stopatrmult=2, scaleout="y", longonly="n")
     returns = PortfolioGenerate(symbol, bars, signals, initial_capital=100000.0, risk=0.02)
     returns = returns.backtest_portfolio()
     Analytics().getresults()
@@ -420,8 +453,6 @@ if __name__ == "__main__":
     returns.to_excel(writer, 'return')
     summtableconsol.to_excel(writer, 'tradesummconsol')
     summtabledetail.to_excel(writer, 'tradesumdet')
-
-    # Close the Pandas Excel writer and output the Excel file.
     writer.save()
 
    # Plot two charts to assess trades and equity curve
@@ -448,3 +479,4 @@ if __name__ == "__main__":
 
     # Plot the figure
     plt.show()
+    print(tradetype)
