@@ -350,31 +350,34 @@ class Analytics():
     def summaryanalytics(self):
         ##Analytics
         global tradetype
-        tradetype = pd.Series(portfolio['tradetype'][portfolio.tradetype != 0].tolist())
-        entry = pd.Series(portfolio['entrypx'][signals['entrydate'][portfolio.longexitsig < 0].tolist()].values)
-        stop = pd.Series(portfolio['stoppx'][signals['entrydate'][portfolio.longexitsig < 0].tolist()].values)
-        exit = pd.Series(portfolio['exitpx'].loc[portfolio.longexitsig < 0].values)
-        entrydate = pd.Series(signals['entrydate'][portfolio.longexitsig < 0].tolist())
-        exitdate = pd.Series(portfolio.loc[portfolio.longexitsig < 0].index)
-        exitsig = pd.Series(portfolio['longexitsig'][portfolio.longexitsig < 0].tolist())
-        favexcursion = [signals['High'].loc[x:y].max() for x, y in zip(entrydate, exitdate)]
-        adverseexcursion = [signals['Low'].loc[x:y].min() for x, y in zip(entrydate, exitdate)]
+        summfilter = (portfolio.longexitsig < 0) | (portfolio.shortexitsig > 0)
+        summfilterconsol = (portfolio.longentrysig == 1) | (portfolio.shortentrysig == -1)
+        tradetype = pd.Series((portfolio.longexitsig+portfolio.shortexitsig)[summfilter].tolist())*-1
+        entry = pd.Series(portfolio['entrypx'][signals['entrydate'][summfilter].tolist()].values)
+        stop = pd.Series(portfolio['stoppx'][signals['entrydate'][summfilter].tolist()].values)
+        exit = pd.Series(portfolio['exitpx'].loc[summfilter].values)
+        entrydate = pd.Series(signals['entrydate'][summfilter].tolist())
+        exitdate = pd.Series(portfolio.loc[summfilter].index)
+        exitsig = pd.Series(portfolio['longexitsig'][summfilter].tolist())
+        favexcursion = [signals['High'].loc[x:y].max() if z > 0 else signals['Low'].loc[x:y].min() for x, y, z in zip(entrydate, exitdate, tradetype)]
+        adverseexcursion = [signals['Low'].loc[x:y].min() if z > 0 else signals['High'].loc[x:y].max() for x, y, z in zip(entrydate, exitdate,tradetype)]
         tradeduration = [len(signals.loc[x:y].index) for x, y in zip(entrydate, exitdate)]
 
-        entryconsol = pd.Series(portfolio['entrypx'].loc[portfolio.longentrysig == 1.0].values)
-        stopconsol = pd.Series(signals['stoppx'].loc[portfolio.longentrysig == 1.0].values)
-        exitconsol = pd.Series([exit[entry==x].mean() for x in entryconsol])
-        entrydateconsol = pd.Series(portfolio.loc[portfolio.longentrysig == 1.0].index)
-        exitdateconsol = pd.Series([exitdate[entry==x].max() for x in entryconsol])
-        favexcursionconsol = [signals['High'].loc[x:y].max() for x, y in zip(entrydateconsol, exitdateconsol)]
-        adverseexcursionconsol = [signals['Low'].loc[x:y].min() for x, y in zip(entrydateconsol, exitdateconsol)]
+        tradetypeconsol = (portfolio.longentrysig+portfolio.shortentrysig)[summfilterconsol].tolist()
+        entryconsol = portfolio['entrypx'].loc[summfilterconsol].values
+        stopconsol = signals['stoppx'].loc[summfilterconsol].values
+        exitconsol = [exit[entry==x].mean() for x in entryconsol]
+        entrydateconsol = portfolio.loc[summfilterconsol].index
+        exitdateconsol = [exitdate[entry==x].max() for x in entryconsol]
+        favexcursionconsol = [signals['High'].loc[x:y].max() if z > 0 else signals['Low'].loc[x:y].min() for x, y, z in zip(entrydateconsol, exitdateconsol, tradetypeconsol)]
+        adverseexcursionconsol = [signals['Low'].loc[x:y].min() if z > 0 else signals['High'].loc[x:y].max() for x, y, z in zip(entrydateconsol, exitdateconsol, tradetypeconsol)]
         tradedurationconsol = [len(signals.loc[x:y].index) for x, y in zip(entrydateconsol, exitdateconsol)]
 
         SummaryTableConsol = pd.concat(
             [pd.Series(entryconsol, name="EntryPx"), pd.Series(stopconsol, name="StopPx"), pd.Series(exitconsol, name="ExitPx"),
              pd.Series(favexcursionconsol, name="MFE"), pd.Series(adverseexcursionconsol, name="MAE"),
              pd.Series(entrydateconsol, name="EntryDate"), pd.Series(exitdateconsol, name="exitdate"),
-             pd.Series(tradedurationconsol, name="TradeDur")], axis=1)
+             pd.Series(tradedurationconsol, name="TradeDur"),pd.Series(tradetypeconsol, name="TradeType")], axis=1)
 
 
         ##SummaryTable
@@ -383,7 +386,7 @@ class Analytics():
             [pd.Series(entry, name="EntryPx"), pd.Series(stop, name="StopPx"), pd.Series(exit, name="ExitPx"),
              pd.Series(favexcursion, name="MFE"), pd.Series(adverseexcursion, name="MAE"),
              pd.Series(entrydate, name="EntryDate"), pd.Series(exitdate, name="exitdate"),
-             pd.Series(tradeduration, name="TradeDur")], axis=1)
+             pd.Series(tradeduration, name="TradeDur"), pd.Series(tradetype, name="TradeType")], axis=1)
 
         def sumtablecalcsnowords(df):
             df['Risk%'] = 100 * ((df['StopPx'] / df['EntryPx']) - 1)
@@ -396,10 +399,10 @@ class Analytics():
             return df
 
         def sumtablecalcs(df):
-            df['Risk%'] = 100 * ((df['StopPx'] / df['EntryPx']) - 1)
-            df['Returns%'] = 100 * ((df['ExitPx'] / df['EntryPx']) - 1)
-            df['MFE RR'] = -100 * ((df['MFE'] / df['EntryPx']) - 1) / df['Risk%']
-            df['MAE RR'] = -100 * ((df['MAE'] / df['EntryPx']) - 1) / df['Risk%']
+            df['Risk%'] = 100 * df['TradeType']*((df['StopPx'] / df['EntryPx']) - 1)
+            df['Returns%'] = 100 * df['TradeType']*((df['ExitPx'] / df['EntryPx']) - 1)
+            df['MFE RR'] = -100 *  df['TradeType']*((df['MFE'] / df['EntryPx']) - 1) / df['Risk%']
+            df['MAE RR'] = -100 *  df['TradeType']*((df['MAE'] / df['EntryPx']) - 1) / df['Risk%']
             df['Gross RR'] = df['Returns%'] / -df['Risk%']
 
             winners = len(df[df['Returns%'] > 0])
@@ -440,9 +443,11 @@ if __name__ == "__main__":
     bars = web.DataReader(symbol, 'yahoo', datetime.datetime(2010, 1, 1), datetime.datetime(2019, 1, 20))
     st = emapbStrategy(symbol, bars, atr_period=10, atr_multiplier=2.25, pullback_period=5)
     signals = st.ATR()
+    ##setting indicators
     signals = st.emakeltner(emaperiod=20)
     signals = st.HLCounter(atrfilter=2, volumefilter=1.5, volumema=20)
     signals = st.entry(upthrustlookback=15, upthrustthreshold=3, rr=2, stopatrmult=2, scaleout="y", longonly="n")
+    ##initialize object, set
     returns = PortfolioGenerate(symbol, bars, signals, initial_capital=100000.0, risk=0.02)
     returns = returns.backtest_portfolio()
     Analytics().getresults()
@@ -479,4 +484,3 @@ if __name__ == "__main__":
 
     # Plot the figure
     plt.show()
-    print(tradetype)
