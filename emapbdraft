@@ -405,6 +405,15 @@ class Analytics():
             df['MAE RR'] = -100 *  df['TradeType']*((df['MAE'] / df['EntryPx']) - 1) / df['Risk%']
             df['Gross RR'] = df['Returns%'] / -df['Risk%']
 
+            def printresultgen(x):
+              total = x.median()
+              long= x[df['TradeType']>0].median()
+              short= x(x[df['TradeType']<0]).median()
+              return([total, long, short])
+              
+            totaltrades = [len(df), len(df[df.TradeType > 0]), len(df[df.TradeType < 0])]
+            totalwinners = [len(df['Returns%'][df['Returns%'] > 0]), len(df['Returns%'][df['Returns%'] > 0][df['TradeType'] > 0]), len(df['Returns%'][df['Returns%']>0][df['TradeType'] < 0])]
+            winrate = np.round([(100 * x / y) for x,y in zip(totalwinners, totaltrades)], 1)
             winners = len(df[df['Returns%'] > 0])
             winavgmfe = df['MFE RR'].loc[df['Returns%'] > 0].median()
             winavgmae = df['MAE RR'].loc[df['Returns%'] > 0].median()
@@ -421,6 +430,7 @@ class Analytics():
             bhcagr = 100 * ((portfolio['ClosePx'].iloc[-1] / portfolio['ClosePx'].iloc[0]) ** (
                     1 / ((enddate - startdate).days / 365)) - 1)
 
+            print(winrate)
             print("On {}, Acc Equity compounded at {}% CAGR vs BuyHold at {}% CAGR".format(symbol, round(cagr, 2),
                                                                                            round(bhcagr, 2)))
             print("Winrate is {}% with {} winners, {} trades".format(round(100 * winners / len(df), 1), winners, len(df)))
