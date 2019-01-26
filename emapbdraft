@@ -405,15 +405,36 @@ class Analytics():
             df['MAE RR'] = -100 *  df['TradeType']*((df['MAE'] / df['EntryPx']) - 1) / df['Risk%']
             df['Gross RR'] = df['Returns%'] / -df['Risk%']
 
-            def printresultgen(x):
-              total = x.median()
-              long= x[df['TradeType']>0].median()
-              short= x(x[df['TradeType']<0]).median()
-              return([total, long, short])
+            def genr(x, roundval=2):
+              total = x.mean()
+              long= x[df['TradeType']>0].mean()
+              short= x[df['TradeType']<0].mean()
+              return(np.round([total, long, short],roundval))
               
             totaltrades = [len(df), len(df[df.TradeType > 0]), len(df[df.TradeType < 0])]
             totalwinners = [len(df['Returns%'][df['Returns%'] > 0]), len(df['Returns%'][df['Returns%'] > 0][df['TradeType'] > 0]), len(df['Returns%'][df['Returns%']>0][df['TradeType'] < 0])]
             winrate = np.round([(100 * x / y) for x,y in zip(totalwinners, totaltrades)], 1)
+            
+            d={}
+            d["Trades"] = totaltrades
+            d["Winners"] = totalwinners
+            d["Winrate %"] = winrate
+            d["Avg R/Trade"] = genr(df['Gross RR'])
+            d["Win R/Trade"] = genr(df['Gross RR'][df['Returns%'] > 0])
+            d["Lose R/Trade"] = genr(df['Gross RR'][df['Returns%'] < 0])
+            d["WinAvgMFE"] = genr(df['MFE RR'][df['Returns%'] > 0])
+            d["WinAvgMAE"] = genr(df['MAE RR'][df['Returns%'] > 0])
+            d["LoseAvgMFE"] = genr(df['MFE RR'][df['Returns%'] < 0])
+            d["LoseAvgMAE"] = genr(df['MAE RR'][df['Returns%'] < 0])
+            d["Win Days"] = genr(df['TradeDur'][df['Returns%'] > 0],1)
+            d["Lose Days"] = genr(df['TradeDur'][df['Returns%'] < 0],1)
+
+            
+            print("{:<15} {:^8} {:^8} {:^8}".format('Key','Total','Long','Short'))
+            for k, v in d.items():
+              total, long, short = v
+              print ("{:<15} {:^8} {:^8} {:^8}".format(k, total, long, short))
+            
             winners = len(df[df['Returns%'] > 0])
             winavgmfe = df['MFE RR'].loc[df['Returns%'] > 0].median()
             winavgmae = df['MAE RR'].loc[df['Returns%'] > 0].median()
@@ -424,13 +445,14 @@ class Analytics():
             avgrtrade = df['Gross RR'].mean()
             avgrwin = df['Gross RR'].loc[df['Returns%'] > 0].mean()
             avgrlose = df['Gross RR'].loc[df['Returns%'] < 0].mean()
+            
             startdate = signals.index[0]
             enddate = signals.index[-1]
             cagr = 100 * ((portfolio['total'].iloc[-1] / 100000) ** (1 / ((enddate - startdate).days / 365)) - 1)
             bhcagr = 100 * ((portfolio['ClosePx'].iloc[-1] / portfolio['ClosePx'].iloc[0]) ** (
                     1 / ((enddate - startdate).days / 365)) - 1)
-
-            print(winrate)
+            
+            
             print("On {}, Acc Equity compounded at {}% CAGR vs BuyHold at {}% CAGR".format(symbol, round(cagr, 2),
                                                                                            round(bhcagr, 2)))
             print("Winrate is {}% with {} winners, {} trades".format(round(100 * winners / len(df), 1), winners, len(df)))
@@ -456,7 +478,7 @@ if __name__ == "__main__":
     ##setting indicators
     signals = st.emakeltner(emaperiod=20)
     signals = st.HLCounter(atrfilter=2, volumefilter=1.5, volumema=20)
-    signals = st.entry(upthrustlookback=15, upthrustthreshold=3, rr=2, stopatrmult=2, scaleout="y", longonly="n")
+    signals = st.entry(upthrustlookback=15, upthrustthreshold=3, rr=2, stopatrmult=2, scaleout="y", longonly="y")
     ##initialize object, set
     returns = PortfolioGenerate(symbol, bars, signals, initial_capital=100000.0, risk=0.02)
     returns = returns.backtest_portfolio()
