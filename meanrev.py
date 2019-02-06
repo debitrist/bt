@@ -18,10 +18,13 @@ print("--- %s seconds ---" % (time.time() - start_time))
 histreturn = bars['Close']/bars['Close'].shift()-1
 rollma = bars['Close'].rolling(200).mean()
 zrollma = (bars['Close']-rollma)/bars['Close'].rolling(200).std()
+ibs = (bars['Close']-bars['Low'])/(bars['High']-bars['Low'])
 histreturn.columns = [['HistReturn']*len(histreturn.columns),histreturn.columns]
 rollma.columns = [['RollMA']*len(rollma.columns),rollma.columns]
 zrollma.columns = [['ZRollMA']*len(zrollma.columns),zrollma.columns]
-bars = pd.concat([bars,histreturn,rollma,zrollma],axis=1)
+ibs.columns = [['IBS']*len(ibs.columns),ibs.columns]
+
+bars = pd.concat([bars,histreturn,rollma,zrollma,ibs],axis=1)
 for i in range(1,6):
     nreturn = (bars['Close'].shift(-i) / bars['Open'].shift(-1)) - 1 ##forward returns
     nreturn.columns = [['nreturn'+str(i)] * len(nreturn.columns), nreturn.columns]
@@ -53,33 +56,42 @@ print("--- %s seconds ---" % (time.time() - start_time))
 
 
 for ticker in symbol:
+    d = {ticker:{i: pd.DataFrame() for i in range(1,6)} for ticker in symbol}
     print(ticker)
-    d = {i: pd.DataFrame() for i in range(1,6)}
     for i in range(1,6):
         nretstr = 'nreturn'+str(i)
         nddstr = 'ndrawdown'+str(i)
-        stats = d[i]
-        basedown1 = bars[bars['HistReturn', ticker] < 0]
+        stats = d[ticker][i]
+        vix = bars['ATRClose', ticker].quantile(0.9)
         belowma = bars[bars['ZRollMA', ticker] < 0][bars['HistReturn', ticker] < 0]
         abovema = bars[bars['ZRollMA', ticker] > 0][bars['HistReturn', ticker] < 0]
         highervol = bars[bars['ZATRClose', ticker] > 0][bars['HistReturn', ticker] < 0]
         lowervol = bars[bars['ZATRClose', ticker] < 0][bars['HistReturn', ticker] < 0]
-        highvix = bars[bars['Close', '^vix'] > 30][bars['HistReturn', ticker] < 0]
-        lowvix = bars[bars['Close', '^vix'] < 30][bars['HistReturn', ticker] < 0]
+        highvix = bars[bars['ATRClose', ticker] > vix][bars['HistReturn', ticker] < 0][bars['IBS', ticker]<0.2]
+        lowvix = bars[bars['ATRClose', ticker] < vix][bars['HistReturn', ticker] < 0]
         belowmahighvol = belowma[belowma['ZATRClose', ticker] > 2]
         belowmalowvol = belowma[belowma['ZATRClose', ticker] < -1]
-        abovemahighvol = abovema[abovema['ZATRClose', ticker] > 2]
+        abovemahighvol = abovema[abovema['ZATRClose', ticker] > 2][bars['IBS', ticker]<0.2]
         abovemalowvol = abovema[abovema['ZATRClose', ticker] < -1]
-        abovemahighvix = abovema[abovema['Close','^vix']>30]
-        belowmahighvix = belowma[belowma['Close','^vix']>30]
-        belowmahighvolhighvix = belowmahighvol[belowmahighvol['Close', '^vix'] > 30]
-        abovemahighvolhighvix = abovemahighvol[abovemahighvol['Close', '^vix'] > 30]
+        abovemahighvix = abovema[abovema['ATRClose', ticker]>vix]
+        belowmahighvix = belowma[belowma['ATRClose',ticker]>vix]
+        belowmahighvolhighvix = belowmahighvol[belowmahighvol['ATRClose',ticker] > vix]
+        abovemahighvolhighvix = abovemahighvol[abovemahighvol['ATRClose',ticker] > vix]
+        def des(df):
+            dfg = pd.Series([df.count(),df[df>0].count()/df.count(),df.mean(), df.std(), df.min(), df.quantile(0.25),df.quantile(0.5),df.quantile(0.75),df.max()], index=['count', 'winct','mean', 'std', 'min', '25%', '50%', '75%', 'max'])
+            return dfg
+        def desdd(df):
+            dfa = pd.Series([df.count(),df[df>df.mean()].count()/df.count(),df.mean(), df.std(), df.min(), df.quantile(0.25),df.quantile(0.5),df.quantile(0.75),df.max()], index=['count', 'winct','mean', 'std', 'min', '25%', '50%', '75%', 'max'])
+            return dfa
         def label(stat,name):
-            stats[str(name)+str(ticker)+str(i)]=stat[nretstr,ticker].describe()
-            stats[str(name)+'d'+str(ticker)+str(i)]=stat[nddstr,ticker].describe()
+            stats[str(name)+str(ticker)+str(i)]=des(stat[nretstr,ticker])
+            stats[str(name)+'d'+str(ticker)+str(i)]=desdd(stat[nddstr,ticker])
 
-        stats['baseline'+str(ticker)+str(i)] = bars[nretstr,ticker].describe()
-        label(basedown1,'basedown1')
+
+        stats['baseline'+str(ticker)+str(i)] = des(bars[nretstr,ticker])
+        label(bars[bars['HistReturn', ticker] < 0],'basedown1')
+        label(bars[bars['IBS', ticker]<0.2],'IBSd')
+        label(bars[bars['IBS', ticker]>0.8],'IBSh')
         label(highvix,'highvix')
         label(lowvix,'lowvix')
         label(belowmahighvol, 'bmahvol')
@@ -92,27 +104,26 @@ for ticker in symbol:
         label(lowervol,'lowervol')
         label(abovemahighvix, 'amahvix')
         label(belowmahighvix, 'bmahvix')
-        stats['abovema'+str(ticker)+str(i)]=abovema[nretstr,ticker].describe()
-        stats['belowma'+str(ticker)+str(i)]= belowma[nretstr,ticker].describe()
+        stats['abovema'+str(ticker)+str(i)]=des(abovema[nretstr,ticker])
+        stats['belowma'+str(ticker)+str(i)]= des(belowma[nretstr,ticker])
 
 
     if ticker == '^gspc': break
 
-summstats = pd.DataFrame([d[1].loc['count'].values,d[1].loc['mean'].values, d[2].loc['mean'].values, d[3].loc['mean'].values,d[4].loc['mean'].values,d[5].loc['mean'].values], index=["Days", "D1", "D2","D3","D4","D5"], columns=d[1].columns)
-print(summstats)
+summstats = pd.DataFrame([d['^gspc'][1].loc['count'].values,d['^gspc'][1].loc['mean'].values, d['^gspc'][2].loc['mean'].values, d['^gspc'][3].loc['mean'].values,d['^gspc'][4].loc['mean'].values,d['^gspc'][5].loc['mean'].values], index=["Days", "D1", "D2","D3","D4","D5"], columns=d['^gspc'][1].columns)
 
 
 
 # list of dataframes
-writer = pd.ExcelWriter('outputsheet3.xlsx')
+writer = pd.ExcelWriter('outputsheet5.xlsx')
 row = 0
 for i in range(1,6):
-    d[i].to_excel(writer, sheet_name='stats', startrow=row, startcol=0)
-    row = row + len(d[i].index) + 2 + 1
+    d['^gspc'][i].to_excel(writer, sheet_name='stats', startrow=row, startcol=0)
+    row = row + len(d['^gspc'][i].index) + 2 + 1
 
-summstats.to_excel(writer, sheet_name='stats', startrow=0, startcol=len(d[1].columns)+2)
+summstats.to_excel(writer, sheet_name='stats', startrow=0, startcol=len(d['^gspc'][1].columns)+2)
 
-belowmahighvol.to_excel(writer, 'highvol')
+bars[bars['IBS', ticker]<0.2].to_excel(writer, 'bma')
 bars.to_excel(writer, 'overall')
 writer.save()
 
@@ -127,18 +138,18 @@ fig, ax = plt.subplots()
 ind = np.arange(N)    # the x locations for the groups
 width = 0.1       # the width of the bars
 
-benchmarkMeans = [d[i]['baseline^gspc'+str(i)].loc['mean'] for i in range(1,6)]
-benchmarkStd = [d[i]['baseline^gspc'+str(i)].loc['std'] for i in range(1,6)]
+benchmarkMeans = [d['^gspc'][i]['baseline^gspc'+str(i)].loc['mean'] for i in range(1,6)]
+benchmarkStd = [d['^gspc'][i]['baseline^gspc'+str(i)].loc['std'] for i in range(1,6)]
 p1 = ax.bar(ind, benchmarkMeans, width, color='r', bottom=0)
 
-highvixMeans = [d[i]['highvix^gspc'+str(i)].loc['mean'] for i in range(1,6)]
-highvixStd = [d[i]['highvix^gspc'+str(i)].loc['std'] for i in range(1,6)]
+highvixMeans = [d['^gspc'][i]['highvix^gspc'+str(i)].loc['mean'] for i in range(1,6)]
+highvixStd = [d['^gspc'][i]['highvix^gspc'+str(i)].loc['std'] for i in range(1,6)]
 p2 = ax.bar(ind + width, highvixMeans, width, color='y', bottom=0)
 
-amaMeans = [d[i]['amahvol^gspc'+str(i)].loc['mean'] for i in range(1,6)]
+amaMeans = [d['^gspc'][i]['amahvol^gspc'+str(i)].loc['mean'] for i in range(1,6)]
 p3 = ax.bar(ind + width*2, amaMeans, width, color='b', bottom=0)
 
-bmaMeans = [d[i]['bmahvol^gspc'+str(i)].loc['mean'] for i in range(1,6)]
+bmaMeans = [d['^gspc'][i]['bmahvol^gspc'+str(i)].loc['mean'] for i in range(1,6)]
 p4 = ax.bar(ind + width*3, bmaMeans, width, color='b', bottom=0)
 
 
