@@ -12,7 +12,7 @@ start_time = time.time()
 
 symbol = ['^vix','^gspc']
 symbol.sort()
-bars = web.DataReader(symbol, 'yahoo', datetime.datetime(1990, 1, 1), datetime.datetime(2019, 1, 29))
+bars = web.DataReader(symbol, 'yahoo', datetime.datetime(2005, 1, 1), datetime.datetime(2019, 1, 29))
 
 print("--- %s seconds ---" % (time.time() - start_time))
 histreturn = bars['Close']/bars['Close'].shift()-1
@@ -52,6 +52,27 @@ atrclose.columns = [['ATRClose']*len(atrclose.columns),atrclose.columns]
 zatrclose.columns = [['ZATRClose']*len(zatrclose.columns),zatrclose.columns]
 bars = pd.concat([bars,trclose,atrclose,zatrclose],axis=1)
 print("--- %s seconds ---" % (time.time() - start_time))
+
+
+bin, bins = pd.qcut(bars['Close', '^vix'], 10, retbins=True)
+bincolumns = [str(round(bins[i],1))+"-"+str(round(bins[i+1],1)) for i in range(0,10)]
+bin = bars.groupby(bin).mean()
+vixgrp= pd.DataFrame([bin['nreturn1','^gspc'].values, bin['nreturn2','^gspc'].values, bin['nreturn3','^gspc'].values, bin['nreturn4','^gspc'].values, bin['nreturn5','^gspc'].values], columns=bincolumns, index=['D1','D2','D3','D4','D5'])
+
+bin, bins = pd.qcut(bars['IBS', '^gspc'], 10, retbins=True)
+bincolumns = [str(round(bins[i],2))+"-"+str(round(bins[i+1],2)) for i in range(0,10)]
+bin = bars.groupby(bin).mean()
+ibsgrp= pd.DataFrame([bin['nreturn1','^gspc'].values, bin['nreturn2','^gspc'].values, bin['nreturn3','^gspc'].values, bin['nreturn4','^gspc'].values, bin['nreturn5','^gspc'].values], columns=bincolumns, index=['D1','D2','D3','D4','D5'])
+
+bin, bins = pd.qcut(bars['ZRollMA', '^gspc'], 10, retbins=True)
+bincolumns = [str(round(bins[i],2))+"-"+str(round(bins[i+1],2)) for i in range(0,10)]
+bin = bars.groupby(bin).mean()
+zrmagrp= pd.DataFrame([bin['nreturn1','^gspc'].values, bin['nreturn2','^gspc'].values, bin['nreturn3','^gspc'].values, bin['nreturn4','^gspc'].values, bin['nreturn5','^gspc'].values], columns=bincolumns, index=['D1','D2','D3','D4','D5'])
+
+
+#groups = bars.groupby(pd.cut(bars['IBS', '^gspc'], 10)).mean()
+
+#grp1 = groups['nreturn1','^gspc']
 
 
 
@@ -115,7 +136,7 @@ summstats = pd.DataFrame([d['^gspc'][1].loc['count'].values,d['^gspc'][1].loc['m
 
 
 # list of dataframes
-writer = pd.ExcelWriter('outputsheet5.xlsx')
+writer = pd.ExcelWriter('outputsheet6.xlsx')
 row = 0
 for i in range(1,6):
     d['^gspc'][i].to_excel(writer, sheet_name='stats', startrow=row, startcol=0)
@@ -125,6 +146,9 @@ summstats.to_excel(writer, sheet_name='stats', startrow=0, startcol=len(d['^gspc
 
 bars[bars['IBS', ticker]<0.2].to_excel(writer, 'bma')
 bars.to_excel(writer, 'overall')
+vixgrp.to_excel(writer,'VIX')
+ibsgrp.to_excel(writer, 'IBS')
+zrmagrp.to_excel(writer, 'zrma')
 writer.save()
 
 
