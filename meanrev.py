@@ -12,7 +12,10 @@ start_time = time.time()
 
 symbol = ['^vix','^gspc']
 symbol.sort()
-bars = web.DataReader(symbol, 'yahoo', datetime.datetime(2005, 1, 1), datetime.datetime(2019, 1, 29))
+bars = web.DataReader(symbol, 'yahoo', datetime.datetime(2010, 1, 1), datetime.datetime(2019, 1, 29))
+returndays = (1,2,3,4,5,10,15,20,25,30)
+returndayindex=["D"+str(i) for i in returndays]
+
 
 print("--- %s seconds ---" % (time.time() - start_time))
 histreturn = bars['Close']/bars['Close'].shift()-1
@@ -25,14 +28,26 @@ zrollma.columns = [['ZRollMA']*len(zrollma.columns),zrollma.columns]
 ibs.columns = [['IBS']*len(ibs.columns),ibs.columns]
 
 bars = pd.concat([bars,histreturn,rollma,zrollma,ibs],axis=1)
-for i in range(1,6):
+for i in returndays:
     nreturn = (bars['Close'].shift(-i) / bars['Open'].shift(-1)) - 1 ##forward returns
     nreturn.columns = [['nreturn'+str(i)] * len(nreturn.columns), nreturn.columns]
     ndrawdown = (bars['Low'].shift(-1)[::-1].rolling(i).min()/bars['Open'].shift(-1)) - 1 ##forward drawdown
     ndrawdown.columns = [['ndrawdown' + str(i)] * len(ndrawdown.columns), ndrawdown.columns]
     bars = pd.concat([bars, nreturn,ndrawdown], axis=1)
 
+
 print("--- %s seconds ---" % (time.time() - start_time))
+
+##RSI
+closetoclose = bars['Close']-bars['Close'].shift()
+gain = closetoclose[closetoclose>=0].fillna(0)
+loss = abs(closetoclose[closetoclose<0]).fillna(0)
+rs = gain.ewm(span=3).mean()/loss.ewm(span=3).mean()
+rsi = 100 - 100/(1+rs)
+rsi.columns = [['RSI']*len(rsi.columns),rsi.columns]
+print(rsi)
+bars=pd.concat([bars,rsi],axis=1)
+
 
 ##ATR
 high_low = np.array(bars['High']-bars['Low'])
@@ -54,32 +69,31 @@ bars = pd.concat([bars,trclose,atrclose,zatrclose],axis=1)
 print("--- %s seconds ---" % (time.time() - start_time))
 
 
-bin, bins = pd.qcut(bars['Close', '^vix'], 10, retbins=True)
-bincolumns = [str(round(bins[i],1))+"-"+str(round(bins[i+1],1)) for i in range(0,10)]
-bin = bars.groupby(bin).mean()
-vixgrp= pd.DataFrame([bin['nreturn1','^gspc'].values, bin['nreturn2','^gspc'].values, bin['nreturn3','^gspc'].values, bin['nreturn4','^gspc'].values, bin['nreturn5','^gspc'].values], columns=bincolumns, index=['D1','D2','D3','D4','D5'])
+benchmarkreturns = pd.Series([bars['nreturn'+str(i),'^gspc'].mean() for i in returndays],index=returndayindex)
 
-bin, bins = pd.qcut(bars['IBS', '^gspc'], 10, retbins=True)
-bincolumns = [str(round(bins[i],2))+"-"+str(round(bins[i+1],2)) for i in range(0,10)]
-bin = bars.groupby(bin).mean()
-ibsgrp= pd.DataFrame([bin['nreturn1','^gspc'].values, bin['nreturn2','^gspc'].values, bin['nreturn3','^gspc'].values, bin['nreturn4','^gspc'].values, bin['nreturn5','^gspc'].values], columns=bincolumns, index=['D1','D2','D3','D4','D5'])
+def sortbinsmean (cutobj, ticker='^gspc', bincount=20):
 
-bin, bins = pd.qcut(bars['ZRollMA', '^gspc'], 10, retbins=True)
-bincolumns = [str(round(bins[i],2))+"-"+str(round(bins[i+1],2)) for i in range(0,10)]
-bin = bars.groupby(bin).mean()
-zrmagrp= pd.DataFrame([bin['nreturn1','^gspc'].values, bin['nreturn2','^gspc'].values, bin['nreturn3','^gspc'].values, bin['nreturn4','^gspc'].values, bin['nreturn5','^gspc'].values], columns=bincolumns, index=['D1','D2','D3','D4','D5'])
+    bin, bins = pd.qcut(cutobj, bincount, retbins=True)
+    bincolumns = [str(round(bins[i],1))+"-"+str(round(bins[i+1],1)) for i in range(0,bincount)]
+    bin = bars.groupby(bin).mean()
+    xgrp= pd.DataFrame([bin['nreturn'+str(i),ticker].values for i in returndays], columns=bincolumns, index=returndayindex)
+    xgrp=xgrp.div(benchmarkreturns, axis=0)-1
+    return xgrp
 
+vixgrp = sortbinsmean(bars['Close', '^vix'])
+ibsgrp = sortbinsmean(bars['IBS', '^gspc'])
+zrmagrp = sortbinsmean(bars['ZRollMA', '^gspc'])
+rsigrp = sortbinsmean(bars['RSI', '^gspc'])
 
 #groups = bars.groupby(pd.cut(bars['IBS', '^gspc'], 10)).mean()
 
 #grp1 = groups['nreturn1','^gspc']
 
 
-
 for ticker in symbol:
-    d = {ticker:{i: pd.DataFrame() for i in range(1,6)} for ticker in symbol}
+    d = {ticker:{i: pd.DataFrame() for i in returndays} for ticker in symbol}
     print(ticker)
-    for i in range(1,6):
+    for i in returndays:
         nretstr = 'nreturn'+str(i)
         nddstr = 'ndrawdown'+str(i)
         stats = d[ticker][i]
@@ -131,14 +145,14 @@ for ticker in symbol:
 
     if ticker == '^gspc': break
 
-summstats = pd.DataFrame([d['^gspc'][1].loc['count'].values,d['^gspc'][1].loc['mean'].values, d['^gspc'][2].loc['mean'].values, d['^gspc'][3].loc['mean'].values,d['^gspc'][4].loc['mean'].values,d['^gspc'][5].loc['mean'].values], index=["Days", "D1", "D2","D3","D4","D5"], columns=d['^gspc'][1].columns)
+summstats = pd.DataFrame([d['^gspc'][i].loc['count'].values,d['^gspc'][1].loc['mean'].values, d['^gspc'][2].loc['mean'].values, d['^gspc'][3].loc['mean'].values,d['^gspc'][4].loc['mean'].values,d['^gspc'][5].loc['mean'].values], index=["Days", "D1", "D2","D3","D4","D5"], columns=d['^gspc'][1].columns)
 
 
 
 # list of dataframes
-writer = pd.ExcelWriter('outputsheet6.xlsx')
+writer = pd.ExcelWriter('outputsheet8.xlsx')
 row = 0
-for i in range(1,6):
+for i in returndays:
     d['^gspc'][i].to_excel(writer, sheet_name='stats', startrow=row, startcol=0)
     row = row + len(d['^gspc'][i].index) + 2 + 1
 
@@ -149,6 +163,8 @@ bars.to_excel(writer, 'overall')
 vixgrp.to_excel(writer,'VIX')
 ibsgrp.to_excel(writer, 'IBS')
 zrmagrp.to_excel(writer, 'zrma')
+rsigrp.to_excel(writer, 'rsi')
+
 writer.save()
 
 
@@ -175,9 +191,6 @@ p3 = ax.bar(ind + width*2, amaMeans, width, color='b', bottom=0)
 
 bmaMeans = [d['^gspc'][i]['bmahvol^gspc'+str(i)].loc['mean'] for i in range(1,6)]
 p4 = ax.bar(ind + width*3, bmaMeans, width, color='b', bottom=0)
-
-
-
 
 ax.set_title('Baseline vs filtered, n day returns')
 ax.set_xticks(ind + width / 2)
