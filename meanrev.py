@@ -12,8 +12,8 @@ start_time = time.time()
 
 symbol = ['^vix','^gspc']
 symbol.sort()
-bars = web.DataReader(symbol, 'yahoo', datetime.datetime(2010, 1, 1), datetime.datetime(2019, 1, 29))
-returndays = (1,2,3,4,5,10,15,20,25,30)
+bars = web.DataReader(symbol, 'yahoo', datetime.datetime(2005, 1, 1), datetime.datetime(2019, 1, 29))
+returndays = (1,2,3,4,5,10,15,20,25,30,50,100)
 returndayindex=["D"+str(i) for i in returndays]
 
 
@@ -22,12 +22,17 @@ histreturn = bars['Close']/bars['Close'].shift()-1
 rollma = bars['Close'].rolling(200).mean()
 zrollma = (bars['Close']-rollma)/bars['Close'].rolling(200).std()
 ibs = (bars['Close']-bars['Low'])/(bars['High']-bars['Low'])
+rollhigh=100*bars['Close']/bars['High'].rolling(100).max()
+rolllow=100*bars['Close']/bars['Low'].rolling(100).min()
 histreturn.columns = [['HistReturn']*len(histreturn.columns),histreturn.columns]
 rollma.columns = [['RollMA']*len(rollma.columns),rollma.columns]
 zrollma.columns = [['ZRollMA']*len(zrollma.columns),zrollma.columns]
 ibs.columns = [['IBS']*len(ibs.columns),ibs.columns]
+rollhigh.columns = [['RHigh']*len(rollhigh.columns),rollhigh.columns]
+rolllow.columns = [['RLow']*len(rolllow.columns),rolllow.columns]
 
-bars = pd.concat([bars,histreturn,rollma,zrollma,ibs],axis=1)
+
+bars = pd.concat([bars,histreturn,rollma,zrollma,ibs,rollhigh,rolllow],axis=1)
 for i in returndays:
     nreturn = (bars['Close'].shift(-i) / bars['Open'].shift(-1)) - 1 ##forward returns
     nreturn.columns = [['nreturn'+str(i)] * len(nreturn.columns), nreturn.columns]
@@ -70,20 +75,32 @@ print("--- %s seconds ---" % (time.time() - start_time))
 
 
 benchmarkreturns = pd.Series([bars['nreturn'+str(i),'^gspc'].mean() for i in returndays],index=returndayindex)
+benchmarkdd = pd.Series([bars['ndrawdown'+str(i),'^gspc'].mean() for i in returndays],index=returndayindex)
+benchmarkretdd = benchmarkreturns.div(benchmarkdd, axis =0)
+
 
 def sortbinsmean (cutobj, ticker='^gspc', bincount=20):
 
     bin, bins = pd.qcut(cutobj, bincount, retbins=True)
     bincolumns = [str(round(bins[i],1))+"-"+str(round(bins[i+1],1)) for i in range(0,bincount)]
     bin = bars.groupby(bin).mean()
-    xgrp= pd.DataFrame([bin['nreturn'+str(i),ticker].values for i in returndays], columns=bincolumns, index=returndayindex)
-    xgrp=xgrp.div(benchmarkreturns, axis=0)-1
-    return xgrp
+    retgrp= pd.DataFrame([bin['nreturn'+str(i),ticker].values for i in returndays], columns=bincolumns, index=returndayindex)
+    ddgrp = pd.DataFrame([bin['ndrawdown'+str(i),ticker].values for i in returndays], columns=bincolumns, index=returndayindex)
+    retddgrp = retgrp.div(ddgrp, axis=0)
+    retgrp1=retgrp.div(benchmarkreturns, axis=0)-1
+    ddgrp1 = 1-ddgrp.div(benchmarkdd, axis=0)
+    retddgrp1 = retddgrp.div(benchmarkretdd, axis=0)-1
+    return retgrp1, ddgrp1, retddgrp1
 
 vixgrp = sortbinsmean(bars['Close', '^vix'])
 ibsgrp = sortbinsmean(bars['IBS', '^gspc'])
 zrmagrp = sortbinsmean(bars['ZRollMA', '^gspc'])
 rsigrp = sortbinsmean(bars['RSI', '^gspc'])
+rhighgrp = sortbinsmean(bars['RHigh', '^gspc'])
+rhighvixgrp = sortbinsmean(bars['RHigh', '^vix'])
+rlowgrp = sortbinsmean(bars['RLow', '^gspc'])
+rlowvixgrp = sortbinsmean(bars['RLow', '^vix'])
+
 
 #groups = bars.groupby(pd.cut(bars['IBS', '^gspc'], 10)).mean()
 
@@ -159,11 +176,22 @@ for i in returndays:
 summstats.to_excel(writer, sheet_name='stats', startrow=0, startcol=len(d['^gspc'][1].columns)+2)
 
 bars[bars['IBS', ticker]<0.2].to_excel(writer, 'bma')
+
+def tabgrp(list,sheetname):
+    row1 = 0
+    for i in list:
+        i.to_excel(writer, sheet_name=str(sheetname), startrow=row1, startcol=0)
+        row1 = row1 + len(i.index) + 2 + 1
+
 bars.to_excel(writer, 'overall')
-vixgrp.to_excel(writer,'VIX')
-ibsgrp.to_excel(writer, 'IBS')
-zrmagrp.to_excel(writer, 'zrma')
-rsigrp.to_excel(writer, 'rsi')
+tabgrp(vixgrp,'VIX')
+tabgrp(ibsgrp,'IBS')
+tabgrp(zrmagrp,'zrma')
+tabgrp(rsigrp,'rsi')
+tabgrp(rhighgrp,'rhigh')
+tabgrp(rhighvixgrp,'rhighvix')
+tabgrp(rlowgrp,'rlow')
+tabgrp(rlowvixgrp,'rlowvix')
 
 writer.save()
 
