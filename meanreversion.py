@@ -1,0 +1,607 @@
+import datetime
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import pandas_datareader.data as web
+from itertools import groupby
+import time
+
+start_time = time.time()
+
+class emapbStrategy():
+    """
+    Requires:
+    symbol - A stock symbol on which to form a strategy on.
+    bars - A DataFrame of bars for the above symbol.
+    short_window - Lookback period for short moving average.
+    long_window - Lookback period for long moving average."""
+
+    def __init__(self, symbol, bars, atr_period=10, atr_multiplier=2.25, pullback_period=5, emaperiod=20):
+        self.symbol = symbol
+        self.bars = bars
+
+        self.atr_period = atr_period
+        self.atr_multiplier = atr_multiplier
+        self.pullback_period = pullback_period
+        self.emaperiod = emaperiod
+
+    def ATR(self):
+        global atr
+        atr = 'ATR_' + str(self.atr_period)
+        df = self.bars
+        df['h-l'] = df['High'] - df['Low']
+        df['h-yc'] = abs(df['High'] - df['Close'].shift())
+        df['l-yc'] = abs(df['Low'] - df['Close'].shift())
+        df['TR'] = df[['h-l', 'h-yc', 'l-yc']].max(axis=1)
+        df[atr] = df['TR'].rolling(self.atr_period).mean()
+        df[atr] = (df[atr].shift() * (self.atr_period - 1) + df['TR']) / self.atr_period
+        df.drop(['h-l', 'h-yc', 'l-yc'], inplace=True, axis=1)
+        return df
+
+    def emakeltner(self, emaperiod=20):
+        global ema
+        ema = 'EMA_' + str(emaperiod) + '_' + str(self.atr_multiplier)
+
+        df = self.bars
+        rollinghigh = pd.Series(df['High'].rolling(emaperiod).mean())
+        rollinglow = pd.Series(df['Low'].rolling(emaperiod).mean())
+        df[ema] = df['Close'].ewm(span=emaperiod, adjust=False).mean()
+        df['kelt_ub'] = df[ema] + self.atr_multiplier * df[atr]
+        df['kelt_lb'] = df[ema] - self.atr_multiplier * df[atr]
+
+        return df
+
+    def relativestrength(self, period=20):
+        df=self.bars
+        df1 = web.DataReader('SPY','yahoo',df.index[0] , df.index[-1])
+        df['RS'] = df['Close']/df1['Close']
+        df['RSZ'] = (df['RS']-df['RS'].rolling(period, min_periods=10).mean())/df['RS'].rolling(period, min_periods=10).std()
+        df['IBS']=(df['Close']-df['Low'])/(df['High']-df['Low'])
+
+
+        return df
+
+    def HLCounter(self, atrfilter=2, volumefilter=1.5, volumema=20):
+        df = self.bars
+
+        upthrustcount = pd.Series(index=df.index).fillna(0.0)
+        downthrustcount = pd.Series(index=df.index).fillna(0.0)
+        balancecount = pd.Series(index=df.index).fillna(0.0)
+        ###upthrust has more validity if accompanied by expanding ATR, and on increased volume
+        for i in range(1, len(df.index)):
+            # highcount
+            if (df['Close'][i] >= df['kelt_ub'][i]) and (df['TR'][i] > atrfilter * df[atr][i - 1]) and (
+                    df['Volume'][i] > volumefilter * df['Volume'].rolling(volumema).mean()[i]):
+                upthrustcount[i] = upthrustcount[i - 1] + 2 + (df['TR'][i] / df[atr][i - 1]) - 1
+            elif (df['Close'][i] >= df['kelt_ub'][i]) and (
+                    df['TR'][i] > atrfilter * df[atr][i - 1] or df['Volume'][i] > volumefilter *
+                    df['Volume'].rolling(volumema).mean()[i]):
+                upthrustcount[i] = upthrustcount[i - 1] + 2
+            elif df['Close'][i] >= df['kelt_ub'][i]:
+                upthrustcount[i] = upthrustcount[i - 1] + 0.5
+            else:
+                upthrustcount[i] = 0
+            ##lowcount
+            if (df['Close'][i] <= df['kelt_lb'][i]) and (df['TR'][i] > atrfilter * df[atr][i - 1]) and (
+                    df['Volume'][i] > volumefilter * df['Volume'].rolling(volumema).mean()[i]):
+                downthrustcount[i] = downthrustcount[i - 1] + 2 + (df['TR'][i] / df[atr][i - 1]) - 1
+            elif (df['Close'][i] <= df['kelt_lb'][i]) and (
+                    df['TR'][i] > atrfilter * df[atr][i - 1] or df['Volume'][i] > volumefilter *
+                    df['Volume'].rolling(volumema).mean()[i]):
+                downthrustcount[i] = downthrustcount[i - 1] + 2
+            elif df['Close'][i] <= df['kelt_lb'][i]:
+                downthrustcount[i] = downthrustcount[i - 1] + 0.5
+            else:
+                downthrustcount[i] = 0
+            #### PB to EMA Count
+            if df['Low'][i] <= df[ema][i] <= df['High'][i]:
+                balancecount[i] = balancecount[i - 1] + 1
+            else:
+                balancecount[i] = 0
+
+        df['upthrustcounter'] = upthrustcount
+        df['downthrustcounter'] = downthrustcount
+        df['balancecount'] = balancecount
+        return df
+
+    def entry(self, upthrustlookback=10, upthrustthreshold=3, rr=3, stopatrmult=1, scaleout="y", longonly="n",hardstop="y"):
+        df = self.bars
+        longentrysig = pd.Series(index=df.index).fillna(0)
+        longexitsig = pd.Series(index=df.index).fillna(0)
+        shortentrysig = pd.Series(index=df.index).fillna(0)
+        shortexitsig = pd.Series(index=df.index).fillna(0)
+        entrypx = pd.Series(index=df.index).fillna(0)
+        exitpx = pd.Series(index=df.index).fillna(0)
+        stoppx = pd.Series(index=df.index).fillna(0)
+        targetpx = pd.Series(index=df.index).fillna(0)
+        stoptrig = pd.Series(index=df.index)
+        targettrig = pd.Series(index=df.index)
+        scaleouttrig = pd.Series(index=df.index)
+        scaleoutpx = pd.Series(index=df.index)
+        tradestatus = pd.Series(index=df.index).fillna(0)
+        entrydate = pd.to_datetime(pd.Series(index=df.index).fillna(0))
+        tradeduration = pd.Series(index=df.index)
+        rszcounter = pd.Series(index=df.index).fillna(0)
+        hardstoptrig = pd.Series(index=df.index)
+
+        def longexitcheckscale():  # exit for scaling out on long entries
+
+            if stoppx[i] >= df['Low'][i]: ##stop trig, separate logic
+                stoptrig.iloc[i] = "y"
+                exitpx[i] = stoppx[i]
+                longexitsig[i] = -1
+                scaleouttrig.iloc[i] = "n"
+                targettrig.iloc[i] = "n"
+            elif scaleoutpx[i] <= df['High'][i]:
+                longexitsig[i] = -0.5
+                scaleouttrig.iloc[i] = "y"
+                stoptrig.iloc[i] = "n"
+                targettrig.iloc[i] = "n"
+                targetpx[i] = entrypx[i] + (entrypx[i] - stoppx[i]) * rr * 10
+                exitpx[i] = scaleoutpx[i]
+                scaleoutpx[i] = scaleoutpx[i - 1]
+                stoppx[i] = df['High'][i - 1] - 3 * df[atr][i - 1]
+            elif (hardstop == "y") and (tradeduration[i] >= 5) and (df['Close'][i]<entrypx[i]) :
+                hardstoptrig.iloc[i] = "y"
+                exitpx[i] = df['Close'][i]
+                longexitsig[i] = -1
+                stoptrig.iloc[i] = "n"
+                targettrig.iloc[i] = "n"
+                scaleouttrig.iloc[i] = "n"
+            else:
+                stoptrig.iloc[i] = "n"
+                targettrig.iloc[i] = "n"
+                scaleouttrig.iloc[i] = "n"
+
+        def longexitcheck(exitsigval=-1):  # exitchecks for allinout on long entries
+            if stoppx[i] >= df['Low'][i]:
+                stoptrig.iloc[i] = "y"
+                targettrig.iloc[i] = "n"
+                exitpx[i] = stoppx[i]
+                longexitsig[i] = exitsigval
+            elif targetpx[i] <= df['High'][i]:
+                targettrig.iloc[i] = "y"
+                stoptrig.iloc[i] = "n"
+                exitpx[i] = targetpx[i]
+                longexitsig[i] = exitsigval
+            elif (hardstop=="y") and (tradeduration[i] >= 5) and (df['Close'][i]<entrypx[i]):
+                hardstoptrig.iloc[i]="y"
+                exitpx[i] = df['Close'][i]
+                longexitsig[i] = exitsigval
+                stoptrig.iloc[i] = "n"
+                targettrig.iloc[i] = "n"
+            else:
+                stoptrig.iloc[i] = "n"
+                targettrig.iloc[i] = "n"
+
+
+
+        def shortexitcheck():  # exit checks for allinout on short entries
+            if targetpx[i] < df['Low'][i]:
+                targettrig.iloc[i] = "n"
+            else:
+                targettrig.iloc[i] = "y"
+                exitpx[i] = targetpx[i]
+                shortexitsig[i] = 1
+            if stoppx[i] > df['High'][i]:
+                stoptrig.iloc[i] = "n"
+            else:
+                stoptrig.iloc[i] = "y"
+                exitpx[i] = stoppx[i]
+                shortexitsig[i] = 1
+
+        for i in range(11, len(
+                df.index)):  # this loop cycles thru 1. entry signal, 2. set trade params, 3. checks for trade status
+            # entry signal criteria: 1. upthrust (close over upperkeltband) within lookback period, 2. no trades currently on, 3. prior bar EMA between HL
+            if tradestatus[i - 1] == 0 and (df['IBS'][i-1]<=0.2) and (df['Open'][i]<df['Close'][i-1]) and (df['Low'][i]<=(df['Open'][i]-df[atr][i-1])):
+                longentrysig[i] = 1
+            elif longonly == "y":
+                longentrysig[i] = 0
+            ##short entry signal criteria
+            elif tradestatus[i - 1] == 0 and any(
+                    df['downthrustcounter'][(i - upthrustlookback):i] >= upthrustthreshold) and (
+                    df['Low'][i - 1] <= df[ema][i - 1] <= df['High'][i - 1]) and(df['RSZ'][i-1]<0):
+                shortentrysig[i] = -1
+            else:
+                shortentrysig[i] = 0
+
+            if longentrysig[i] == 1:  ##long entry mgmt
+                # upon entry logic, set entry, stop, target prices
+                entrypx[i] = df['Open'][i]-df[atr][i-1]
+                stoppx[i] = entrypx[i] - df[atr][i - 1] * stopatrmult
+                targetpx[i] = entrypx[i] + (entrypx[i] - stoppx[i]) * rr
+                scaleoutpx[i] = entrypx[i] + (entrypx[i] - stoppx[i]) * rr
+                entrydate[i] = df.index[i]  ##record entrydate upon entry
+                tradestatus[i] = 1
+                if hardstop=="y":
+                    tradeduration[i]=tradeduration[i-1]+1
+                    rszcounter[i] = rszcounter[i-1] + 1 if df['RSZ'][i] < 0 else 0
+                ##stoplogic on the current bar
+                if scaleout == "y":
+                    longexitcheckscale()
+                else:
+                    longexitcheck(exitsigval=-1)
+            elif shortentrysig[i] == -1:  ##short entry mgmt
+                entrypx[i] = df['Open'][i]
+                stoppx[i] = entrypx[i] + df[atr][i - 1] * stopatrmult
+                targetpx[i] = entrypx[i] + (entrypx[i] - stoppx[i]) * rr*0.5
+                entrydate[i] = df.index[i]  ##record entrydate upon entry
+                tradestatus[i] = -1
+                tradeduration[i] = 1
+                shortexitcheck()
+            elif tradestatus[i - 1] == 1:  ##long trade mgmt
+                entrypx[i] = entrypx[i - 1]
+                if hardstop=="y":
+                    tradeduration[i]=tradeduration[i-1]+1
+                    rszcounter[i] = rszcounter[i-1] + 1 if df['RSZ'][i] < 0 else rszcounter[i-1]
+                stoppx[i] = stoppx[i - 1]
+                targetpx[i] = targetpx[i - 1]
+                scaleoutpx[i] = scaleoutpx[i - 1]
+                entrydate[i] = entrydate[i - 1]
+                if scaleout == "y":
+                    longexitcheckscale()
+                else:
+                    longexitcheck(exitsigval=-1)
+            elif tradestatus[i - 1] == -1:  ##short trade mgmt
+                entrypx[i] = entrypx[i - 1]
+                tradeduration[i]=tradeduration[i-1]+1
+                stoppx[i] = stoppx[i - 1]
+                targetpx[i] = targetpx[i - 1]
+                entrydate[i] = entrydate[i - 1]
+                shortexitcheck()
+            elif tradestatus[i - 1] == 0.5:  ##scaling out stop
+                entrypx[i] = entrypx[i - 1]
+                tradeduration[i]=tradeduration[i-1]+1
+                stoppx[i] = max(df['High'][(i - 10):(i - 1)].max() - (3 * df[atr][i - 1]),
+                                stoppx[i - 1])  # trailing stop
+                targetpx[i] = targetpx[i - 1]
+                entrydate[i] = entrydate[i - 1]
+                scaleouttrig.iloc[i] = "y"
+                longexitcheck(exitsigval=-0.5)
+            else:
+                entrypx[i] = 0
+                stoppx[i] = 0
+                targetpx[i] = 0
+                tradeduration[i]=0
+                entrydate[i] = entrydate[i - 1]
+
+            ##tradestatus
+            if (longentrysig[i] == 1) and (targettrig.iloc[i] == "n") and (stoptrig.iloc[i] == "n") and (
+                    scaleouttrig.iloc[i] != "y") and (hardstoptrig.iloc[i] != "y"):
+                tradestatus[i] = 1
+            elif (shortentrysig[i] == -1) and (targettrig.iloc[i] == "n") and (stoptrig.iloc[i] == "n") and (
+                    scaleouttrig.iloc[i] != "y") and (hardstoptrig.iloc[i] != "y"):
+                tradestatus[i] = -1
+            elif (targettrig.iloc[i] == "n") and (stoptrig.iloc[i] == "n") and (scaleouttrig.iloc[i] == "y") and (hardstoptrig.iloc[i] != "y"):
+                tradestatus[i] = 0.5
+            elif (targettrig.iloc[i] == "n") and (stoptrig.iloc[i] == "n") and (hardstoptrig.iloc[i] != "y"):
+                tradestatus[i] = tradestatus[i - 1]
+            else:
+                tradestatus[i] = 0
+
+        df['longentrysig'] = longentrysig
+        df['longexitsig'] = longexitsig
+        df['shortentrysig'] = shortentrysig
+        df['shortexitsig'] = shortexitsig
+        df['entrypx'] = entrypx
+        df['exitpx'] = exitpx
+        df['stoppx'] = stoppx
+        df['targetpx'] = targetpx
+        df['scaleoutpx'] = scaleoutpx
+        df['stoptrig'] = stoptrig
+        df['targettrig'] = targettrig
+        df['scaleouttrig'] = scaleouttrig
+        df['hardstoptrig'] = hardstoptrig
+        df['tradestatus'] = tradestatus
+        df['entrydate'] = entrydate
+        df['tradeduration'] = tradeduration
+        df['rszcounter'] = rszcounter
+        return df
+
+
+class PortfolioGenerate():
+    """Encapsulates the notion of a portfolio of positions based
+    on a set of signals as provided by a Strategy.
+
+    Requires:
+    symbol - A stock symbol which forms the basis of the portfolio.
+    bars - A DataFrame of bars for a symbol set.
+    signals - A pandas DataFrame of signals (1, 0, -1) for each symbol.
+    initial_capital - The amount in cash at the start of the portfolio."""
+
+    def __init__(self, symbol, bars, signals, initial_capital=100000.0, risk=0.02):
+        self.symbol = symbol
+        self.bars = bars
+        self.signals = signals
+        self.initial_capital = float(initial_capital)
+        self.risk = risk
+
+    def backtest_portfolio(self, positionsizing="y"):
+        global portfolio
+        portfolio = pd.DataFrame(index=self.bars.index).fillna(0)
+        portfolio['longentrysig'] = self.bars['longentrysig']
+        portfolio['longexitsig'] = self.bars['longexitsig']
+        portfolio['shortentrysig'] = self.bars['shortentrysig']
+        portfolio['shortexitsig'] = self.bars['shortexitsig']
+        portfolio['tradestatus'] = self.bars['tradestatus']
+        portfolio['entrypx'] = self.bars['entrypx']
+        portfolio['exitpx'] = self.bars['exitpx']
+        portfolio['stoppx'] = self.bars['stoppx']
+        portfolio['ClosePx'] = self.bars['Close']
+        entrytrade = pd.Series(index=self.bars.index).fillna(0)
+        closetradeholding = pd.Series(index=self.bars.index).fillna(0)
+        exittrade = pd.Series(index=self.bars.index).fillna(0)
+        portfolio['trades'] = -entrytrade + exittrade
+        portfolio['positiononclose'] = closetradeholding
+        portfolio['holdings'] = portfolio['positiononclose'] * portfolio['ClosePx']
+        portfolio['cash'] = self.initial_capital + (portfolio['trades']).cumsum()
+
+        for i in range(1, len(portfolio.index)):
+            if portfolio['longentrysig'][i] == 1 or portfolio['shortentrysig'][i] == -1:
+                suggestedpositionsize = self.initial_capital * self.risk / (
+                        self.bars['entrypx'][i] - self.bars['stoppx'][i]) if positionsizing == "y" else  portfolio['cash'][i-1]/portfolio['entrypx'][i]
+                closetradeholding[i] = suggestedpositionsize * (
+                        portfolio['longentrysig'][i] + portfolio['longexitsig'][i] - portfolio['shortentrysig'][i] -
+                        portfolio['shortexitsig'][i])
+                entrytrade[i] = self.bars['entrypx'][i] * suggestedpositionsize
+                exittrade[i] = portfolio['exitpx'][i] * suggestedpositionsize * (-portfolio['longexitsig'][i] + portfolio['shortexitsig'][i])
+            elif portfolio['longexitsig'][i] < 0 or portfolio['shortexitsig'][i] > 0:
+                exittrade[i] = portfolio['exitpx'][i] * suggestedpositionsize * (
+                            -portfolio['longexitsig'][i] + portfolio['shortexitsig'][i])
+                closetradeholding[i] = closetradeholding[i - 1] + suggestedpositionsize * (
+                            portfolio['longexitsig'][i] - portfolio['shortexitsig'][i])
+            else:
+                closetradeholding[i] = closetradeholding[i - 1]
+
+        portfolio['trades'] = -entrytrade + exittrade
+        portfolio['positiononclose'] = closetradeholding
+        portfolio['holdings'] = portfolio['positiononclose'] * portfolio['ClosePx']
+        portfolio['cash'] = self.initial_capital + (portfolio['trades']).cumsum()
+        portfolio['total'] = portfolio['cash'] + portfolio['holdings']
+        portfolio['returns'] = portfolio['total'].pct_change()
+        portfolio['tradetype'] = portfolio['tradestatus'].diff()
+        return portfolio
+
+
+class Analytics():
+    def __init__(self, symbol):
+        self.symbol = symbol
+
+    def getresults(self):
+        # Returns
+        returns_s = portfolio['total'].pct_change().replace([np.inf, -np.inf], np.nan)
+        returns_s = returns_s.fillna(0.00)
+        bmarkreturns = portfolio['ClosePx'].pct_change().replace([np.inf, -np.inf], np.nan)
+        bmarkreturns = bmarkreturns.fillna(0.00)
+
+        # Rolling Annualised Sharpe
+        rolling = returns_s.rolling(window=252)
+        rolling_sharpe_s = np.sqrt(252) * (rolling.mean() / rolling.std())
+
+        # Cummulative Returns
+        cum_returns_s = np.exp(np.log(1 + returns_s).cumsum())
+        cum_bmarkreturns = np.exp(np.log(1 + bmarkreturns).cumsum())
+
+        # Drawdown, max drawdown, max drawdown duration
+        def create_drawdowns(returns):
+            idx = returns.index
+            hwm = np.zeros(len(idx))
+
+            # Create the high water mark
+            for t in range(1, len(idx)):
+                hwm[t] = max(hwm[t - 1], returns.iloc[t])
+
+            # Calculate the drawdown and duration statistics
+            global perf
+            perf = pd.DataFrame(index=idx)
+            perf["Drawdown"] = (returns-hwm) / hwm
+            perf["Drawdown"].iloc[0] = 0.0
+            perf["DurationCheck"] = np.where(perf["Drawdown"] == 0, 0, 1)
+            duration = max(
+                sum(1 for i in g if i == 1)
+                for k, g in groupby(perf["DurationCheck"])
+            )
+            return perf["Drawdown"], np.min(perf["Drawdown"]), duration
+
+        dd_s, max_dd, dd_dur = create_drawdowns(cum_returns_s)
+        bm_dd_s, bm_max_dd, bm_dd_dur = create_drawdowns(cum_bmarkreturns)
+
+        startdate = signals.index[0]
+        enddate = signals.index[-1]
+        cagr = 100 * ((portfolio['total'].iloc[-1] / 100000) ** (1 / ((enddate - startdate).days / 365)) - 1)
+        bhcagr = 100 * ((portfolio['ClosePx'].iloc[-1] / portfolio['ClosePx'].iloc[0]) ** (
+                1 / ((enddate - startdate).days / 365)) - 1)
+
+        # Equity statistics dictionary
+        statistics = {}
+        statistics["CAGR"] = [round(cagr,2), round(bhcagr,2)]
+        statistics["Sharpe"] = [round(np.sqrt(252) * (np.mean(returns_s)) / np.std(returns_s),2), round(np.sqrt(252) * (np.mean(bmarkreturns)) / np.std(bmarkreturns),2)]
+        statistics["Max DD %"] = [round(100*max_dd,2), round(100*bm_max_dd,2)]
+        statistics["Max DD Days"] = [dd_dur, bm_dd_dur]
+        statistics["CAR/MDD"] = [round(-cagr/max_dd/100, 2),round(-bhcagr/bm_max_dd/100, 2)]
+        statistics["MoM x"] = [round((portfolio['total'].iloc[-1] / 100000),2),round((portfolio['ClosePx'].iloc[-1] / portfolio['ClosePx'].iloc[0]),2)]
+
+        print("{:<15} {:^8} {:^8}".format('' + str(self.symbol), 'Test', 'BuyHold'))
+        for k, v in statistics.items():
+            bt,bmark = v
+            print("{:<15} {:^8} {:^8}".format(k, bt,bmark))
+
+        return dd_s, bm_dd_s
+
+    def summaryanalytics(self): ##creates table with individual trades
+        ##Analytics
+        global tradetype
+        summfilter = (portfolio.longexitsig < 0) | (portfolio.shortexitsig > 0)
+        summfilterconsol = (portfolio.longentrysig == 1) | (portfolio.shortentrysig == -1)
+        tradetype = pd.Series((portfolio.longexitsig + portfolio.shortexitsig)[summfilter].tolist()) * -1
+        entry = pd.Series(portfolio['entrypx'][signals['entrydate'][summfilter].tolist()].values)
+        stop = pd.Series(portfolio['stoppx'][signals['entrydate'][summfilter].tolist()].values)
+        exit = pd.Series(portfolio['exitpx'].loc[summfilter].values)
+        entrydate = pd.Series(signals['entrydate'][summfilter].tolist())
+        exitdate = pd.Series(portfolio.loc[summfilter].index)
+        exitsig = pd.Series(portfolio['longexitsig'][summfilter].tolist())
+        favexcursion = [signals['High'].loc[x:y].max() if z > 0 else signals['Low'].loc[x:y].min() for x, y, z in
+                        zip(entrydate, exitdate, tradetype)]
+        adverseexcursion = [signals['Low'].loc[x:y].min() if z > 0 else signals['High'].loc[x:y].max() for x, y, z in
+                            zip(entrydate, exitdate, tradetype)]
+        tradeduration = [len(signals.loc[x:y].index) for x, y in zip(entrydate, exitdate)]
+
+        tradetypeconsol = (portfolio.longentrysig + portfolio.shortentrysig)[summfilterconsol].tolist()
+        entryconsol = portfolio['entrypx'].loc[summfilterconsol].values
+        stopconsol = signals['stoppx'].loc[summfilterconsol].values
+        exitconsol = [exit[entry == x].mean() for x in entryconsol]
+        entrydateconsol = portfolio.loc[summfilterconsol].index
+        exitdateconsol = [exitdate[entry == x].max() for x in entryconsol]
+        favexcursionconsol = [signals['High'].loc[x:y].max() if z > 0 else signals['Low'].loc[x:y].min() for x, y, z in
+                              zip(entrydateconsol, exitdateconsol, tradetypeconsol)]
+        adverseexcursionconsol = [signals['Low'].loc[x:y].min() if z > 0 else signals['High'].loc[x:y].max() for x, y, z
+                                  in zip(entrydateconsol, exitdateconsol, tradetypeconsol)]
+        tradedurationconsol = [len(signals.loc[x:y].index) for x, y in zip(entrydateconsol, exitdateconsol)]
+
+        SummaryTableConsol = pd.concat(
+            [pd.Series(entryconsol, name="EntryPx"), pd.Series(stopconsol, name="StopPx"),
+             pd.Series(exitconsol, name="ExitPx"),
+             pd.Series(favexcursionconsol, name="MFE"), pd.Series(adverseexcursionconsol, name="MAE"),
+             pd.Series(entrydateconsol, name="EntryDate"), pd.Series(exitdateconsol, name="exitdate"),
+             pd.Series(tradedurationconsol, name="TradeDur"), pd.Series(tradetypeconsol, name="TradeType")], axis=1)
+
+        ##SummaryTable
+        global SummaryTableDetail
+        SummaryTableDetail = pd.concat(
+            [pd.Series(entry, name="EntryPx"), pd.Series(stop, name="StopPx"), pd.Series(exit, name="ExitPx"),
+             pd.Series(favexcursion, name="MFE"), pd.Series(adverseexcursion, name="MAE"),
+             pd.Series(entrydate, name="EntryDate"), pd.Series(exitdate, name="exitdate"),
+             pd.Series(tradeduration, name="TradeDur"), pd.Series(tradetype, name="TradeType")], axis=1)
+
+        def sumtablecalcsnowords(df):
+            df['Risk%'] = 100 * ((df['StopPx'] / df['EntryPx']) - 1)
+            df['Returns%'] = 100 * ((df['ExitPx'] / df['EntryPx']) - 1)
+            df['MFE RR'] = -100 * ((df['MFE'] / df['EntryPx']) - 1) / df['Risk%']
+            df['MAE RR'] = -100 * ((df['MAE'] / df['EntryPx']) - 1) / df['Risk%']
+            df['Gross RR'] = df['Returns%'] / -df['Risk%']
+            df['Adj RR'] = (exitsig * df['Returns%']) / df['Risk%']
+
+            return df
+
+        def sumtablecalcs(df):
+            df['Risk%'] = 100 * df['TradeType'] * ((df['StopPx'] / df['EntryPx']) - 1)
+            df['Returns%'] = 100 * df['TradeType'] * ((df['ExitPx'] / df['EntryPx']) - 1)
+            df['MFE RR'] = -100 * df['TradeType'] * ((df['MFE'] / df['EntryPx']) - 1) / df['Risk%']
+            df['MAE RR'] = -100 * df['TradeType'] * ((df['MAE'] / df['EntryPx']) - 1) / df['Risk%']
+            df['Gross RR'] = df['Returns%'] / -df['Risk%']
+
+            def genr(x, roundval=2):
+                total = x.mean()
+                long = x[df['TradeType'] > 0].mean()
+                short = x[df['TradeType'] < 0].mean()
+                return (np.round([total, long, short], roundval))
+
+            totaltrades = [len(df), len(df[df.TradeType > 0]), len(df[df.TradeType < 0])]
+            totalwinners = [len(df['Returns%'][df['Returns%'] > 0]),
+                            len(df['Returns%'][df['Returns%'] > 0][df['TradeType'] > 0]),
+                            len(df['Returns%'][df['Returns%'] > 0][df['TradeType'] < 0])]
+            winrate = np.round([(100 * x / y) if y != 0 else 0 for x, y in zip(totalwinners, totaltrades)], 1)
+
+            d = {}
+            d["Trades"] = totaltrades
+            d["Winners"] = totalwinners
+            d["Winrate %"] = winrate
+            d["Avg R/Trade"] = genr(df['Gross RR'])
+            d["Win R/Trade"] = genr(df['Gross RR'][df['Returns%'] > 0])
+            d["Lose R/Trade"] = genr(df['Gross RR'][df['Returns%'] < 0])
+            d["WinAvgMFE"] = genr(df['MFE RR'][df['Returns%'] > 0])
+            d["WinAvgMAE"] = genr(df['MAE RR'][df['Returns%'] > 0])
+            d["LoseAvgMFE"] = genr(df['MFE RR'][df['Returns%'] < 0])
+            d["LoseAvgMAE"] = genr(df['MAE RR'][df['Returns%'] < 0])
+            d["Win Days"] = genr(df['TradeDur'][df['Returns%'] > 0], 1)
+            d["Lose Days"] = genr(df['TradeDur'][df['Returns%'] < 0], 1)
+
+            print("{:<15} {:^8} {:^8} {:^8}".format(''+str(self.symbol), 'Total', 'Long', 'Short'))
+            for k, v in d.items():
+                total, long, short = v
+                print("{:<15} {:^8} {:^8} {:^8}".format(k, total, long, short))
+
+            winners = len(df[df['Returns%'] > 0])
+            winavgmfe = df['MFE RR'].loc[df['Returns%'] > 0].median()
+            winavgmae = df['MAE RR'].loc[df['Returns%'] > 0].median()
+            loseavgmfe = df['MFE RR'].loc[df['Returns%'] < 0].median()
+            loseavgmae = df['MAE RR'].loc[df['Returns%'] < 0].median()
+            windur = df['TradeDur'].loc[df['Returns%'] > 0].median()
+            losedur = df['TradeDur'].loc[df['Returns%'] < 0].median()
+            avgrtrade = df['Gross RR'].mean()
+            avgrwin = df['Gross RR'].loc[df['Returns%'] > 0].mean()
+            avgrlose = df['Gross RR'].loc[df['Returns%'] < 0].mean()
+
+            print("Winner MFE is {} R, MAE is {} R".format(round(winavgmfe, 2), round(winavgmae, 2)))
+            print("Loser MFE is {} R, MAE is {} R".format(round(loseavgmfe, 2), round(loseavgmae, 2)))
+            print("Winner duration {} days, Loser duration {} days".format(windur, losedur))
+
+            return df
+
+        SummaryTableConsol = sumtablecalcs(SummaryTableConsol)
+        SummaryTableDetail = sumtablecalcsnowords(SummaryTableDetail)
+
+        return SummaryTableConsol, SummaryTableDetail
+
+
+if __name__ == "__main__":
+    # Obtain daily bars of AAPL from Yahoo Finance for the period
+    symbol = 'spy'
+    bars = web.DataReader(symbol, 'yahoo', datetime.datetime(2005, 1, 1), datetime.datetime(2019, 2, 23))
+    st = emapbStrategy(symbol, bars, atr_period=10, atr_multiplier=2.25, pullback_period=10)
+    ##setting indicators
+    signals = st.ATR()
+    signals =  st.relativestrength(period=20)
+    signals = st.emakeltner(emaperiod=20)
+    signals = st.HLCounter(atrfilter=2, volumefilter=1.5, volumema=20)
+    print("--- %s seconds ---" % (time.time() - start_time))
+
+    signals = st.entry(upthrustlookback=15, upthrustthreshold=3, rr=2, stopatrmult=1.5, scaleout="y", longonly="y",hardstop="n")
+    print("--- %s seconds ---" % (time.time() - start_time))
+
+    ##initialize portfolio object; generate portfolio
+    returns = PortfolioGenerate(symbol, bars, signals, initial_capital=100000.0, risk=0.02)
+    returns = returns.backtest_portfolio(positionsizing="y")
+    ##create summary stats
+    summtableconsol, summtabledetail = Analytics(symbol).summaryanalytics()
+    dd, bmdd = Analytics(symbol).getresults()
+    print("--- %s seconds ---" % (time.time() - start_time))
+
+    writer = pd.ExcelWriter('outputsheet.xlsx')
+    signals.to_excel(writer, 'signal')
+    returns.to_excel(writer, 'return')
+    summtableconsol.to_excel(writer, 'tradesummconsol')
+    summtabledetail.to_excel(writer, 'tradesumdet')
+    perf.to_excel(writer, 'drawdown')
+    writer.save()
+
+    print("--- %s seconds ---" % (time.time() - start_time))
+
+    # Plot two charts to assess trades and equity curve
+    fig = plt.figure()
+    fig.patch.set_facecolor('white')  # Set the outer colour to white
+    # Plot the AAPL closing price overlaid with the indicator
+    ax1 = fig.add_subplot(311, ylabel='Price in $')
+
+    bars['Close'].plot(ax=ax1, color='r', lw=2.)
+    signals[[ema]].plot(ax=ax1, lw=1.)
+    # Plot the "buy" trades against AAPL
+    ax1.plot(portfolio.loc[portfolio.longentrysig == 1.0].index,
+             portfolio['entrypx'].loc[portfolio.longentrysig == 1.0],
+             '^', markersize=5, color='g')
+    # Plot the "exit" trades against AAPL
+    ax1.plot(portfolio.loc[portfolio.longexitsig < 0].index,
+             portfolio['exitpx'].loc[portfolio.longexitsig < 0], '^', markersize=5, color='k')
+
+    # Plot the equity curve in dollars
+    ax2 = fig.add_subplot(312, ylabel='Portfolio value in $')
+    returns['total'].plot(ax=ax2, lw=2.)
+
+    ax3 = fig.add_subplot(313, ylabel='Drawdown %')
+    dd.plot(ax=ax3, color='r', lw=2.)
+    bmdd.plot(ax=ax3, color='b', lw=2.)
+
+    # Plot the figure
+    plt.show()
+
+print("--- %s seconds ---" % (time.time() - start_time))
