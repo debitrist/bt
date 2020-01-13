@@ -1,0 +1,48 @@
+const superagent = require('superagent');
+const json2csv = require('json2csv');
+const fs = require('fs');
+
+
+function writeToFile(data) {
+	// const csv = json2csv({ data }); // opt pass { fields opject } param 2
+	fs.writeFile('/home/jmt/temp/barchart_data.csv', data, function(err) {
+		console.error('error: ' , err);
+		if (err) throw err;
+	});
+}
+
+superagent
+	.get('https://www.barchart.com/')
+	.then(res => {
+		const setCookie = res.header['set-cookie'];
+		const xsrfTokenPart = setCookie[0].split('XSRF-TOKEN')[1];
+		const xsrfToken = xsrfTokenPart.split(';')[0].substr(1).split('%')[0] + '=';
+
+		console.log('xsrfToken: ', xsrfToken);
+
+		return superagent
+			.get('https://www.barchart.com/proxies/timeseries/queryeod.ashx?symbol=ESZ19&data=daily&maxrecords=640&volume=contract&order=asc&dividends=false&backadjust=false&daystoexpiration=1&contractroll=expiration')
+			.set('referer', 'https://www.barchart.com/futures/quotes/ESZ19/interactive-chart')
+			.set('User-Agent', 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/76.0.3809.87 Safari/537.36')
+			.set('Cookie', setCookie)
+			.set('x-xsrf-token', xsrfToken)
+			.set('Sec-Fetch-Mode', 'cors')
+			// ho boy, don't do this
+			.set('authority', 'www.barchart.com')
+			.set('accept-encoding', 'gzip, deflate, br')
+			.then(({ status, text }) => {
+				if (status !== 200) {
+					console.error('Not a 200!  status: ', status);
+				}
+				console.log(text);
+				const stringed = JSON.stringify(text);
+				writeToFile(text);
+			})
+			.catch(e => {
+				console.log('err ');
+			})
+	})
+	.catch(err => {
+		debugger
+		console.error(err);
+	})
