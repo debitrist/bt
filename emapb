@@ -5,7 +5,7 @@ import pandas as pd
 import pandas_datareader.data as web
 from itertools import groupby
 
-
+https://www.citivelocity.com/rendition/eppublic/documentService/dXNlcl9pZD0tU2dwQ2NBOUliTQ/ZmlsZV9uYW1lPUxWVF9Nb2RlbF9fQ2xpZW50X0NvcHlfXzI4X1NlcHRfMjBfXzI4U2VwMjAyMDEwMTUwMS54bHN4JnBsYXRmb3JtPTc4?E6XYAMOB6412478
 class emapbStrategy():
     """
     Requires:
